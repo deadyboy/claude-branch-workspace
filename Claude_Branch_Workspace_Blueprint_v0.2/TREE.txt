@@ -1,0 +1,57 @@
+Claude_Branch_Workspace_Blueprint_v0.2
+├── .claude
+│   └── skills
+│       ├── bootstrap-project
+│       │   └── SKILL.md
+│       ├── review-phase
+│       │   └── SKILL.md
+│       └── runtime-probe
+│           └── SKILL.md
+├── decisions
+│   ├── ADR-001-control-plane-not-runtime.md
+│   ├── ADR-002-two-tree-model.md
+│   ├── ADR-003-identifiers-not-names.md
+│   ├── ADR-004-workspace-modes.md
+│   ├── ADR-005-local-first-and-runtime-adapters.md
+│   ├── ADR-006-historical-fork-strategy.md
+│   └── ADR-007-implementation-stack.md
+├── docs
+│   ├── generated
+│   │   ├── README.md
+│   │   └── RUNTIME_CAPABILITY_MATRIX.md
+│   ├── 00_PRODUCT_SPEC.md
+│   ├── 01_SYSTEM_ARCHITECTURE.md
+│   ├── 02_CONVERSATION_TREE.md
+│   ├── 03_RUNTIME_ADAPTER.md
+│   ├── 04_EVENT_AND_AGENT_MODEL.md
+│   ├── 05_UI_UX_SPEC.md
+│   ├── 06_SECURITY_AND_PERMISSIONS.md
+│   ├── 07_SELF_REVIEW.md
+│   ├── 08_VERIFIED_CLAUDE_CAPABILITIES.md
+│   ├── 09_DATA_MODEL.md
+│   ├── 10_CONTROL_PLANE_API.md
+│   └── 11_TEST_STRATEGY.md
+├── prompts
+│   ├── ARCHITECTURE_REVIEW_PROMPT.md
+│   ├── FIRST_PROMPT.txt
+│   └── PHASE_REVIEW_PROMPT.md
+├── tasks
+│   ├── PHASE_0_CAPABILITY_AND_ARCHITECTURE.md
+│   ├── PHASE_1_DOMAIN_AND_PERSISTENCE.md
+│   ├── PHASE_2_RUNTIME_INTEGRATION.md
+│   ├── PHASE_3_EVENTS_AND_EXECUTION_TREE.md
+│   ├── PHASE_4_UI.md
+│   ├── PHASE_5_AGENT_CONTROL_MCP.md
+│   └── PHASE_6_SCALE_AND_HARDENING.md
+├── .gitignore
+├── ACCEPTANCE_CRITERIA.md
+├── AGENTS.md
+├── BLUEPRINT_VALIDATION.json
+├── CHANGELOG.md
+├── CLAUDE.md
+├── IMPLEMENTATION_BACKLOG.md
+├── PACKAGE_MANIFEST.md
+├── PROJECT_STATE.md
+├── README.md
+├── SELF_AUDIT_REPORT.md
+└── START_HERE.md

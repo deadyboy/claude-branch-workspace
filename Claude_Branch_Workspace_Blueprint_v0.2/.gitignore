@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
+*.log
+.DS_Store
+Thumbs.db
+
+# local runtime/database artifacts (implementation may refine)
+data/
+tmp/
+.worktrees/
+
+# runtime experiment artifacts (never commit transient probe state)
+.runtime-experiments/

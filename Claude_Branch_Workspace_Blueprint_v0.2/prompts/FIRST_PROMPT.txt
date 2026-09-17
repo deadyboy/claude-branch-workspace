@@ -1,0 +1,26 @@
+Read START_HERE.md and all files it marks as required. Then take ownership of this repository as the lead implementation agent.
+
+Your job is not merely to propose a plan. Execute the project.
+
+If this directory is not already a git repository, initialize a local git repository before implementation work (do not create or push a remote unless I ask). Then start with Phase 0 exactly as specified in tasks/PHASE_0_CAPABILITY_AND_ARCHITECTURE.md. Before large-scale coding, verify the actual Claude Code runtime capabilities on this machine, especially:
+1) session start/resume,
+2) branch/fork,
+3) branch-of-branch,
+4) whether a stable programmatic path exists for forking from an arbitrary historical conversation turn,
+5) hooks/subagent observability,
+6) process control,
+7) shared filesystem vs worktree behavior.
+
+Use disposable test directories for runtime experiments.
+
+Use subagents when parallel independent investigation or independent review materially improves correctness. Do not create subagents just to inflate parallelism.
+
+After Phase 0, if the gate passes, continue autonomously through the subsequent phases. You do not need to ask me for approval after every phase. Pause only for genuine blockers requiring user credentials, external authorization, destructive remote operations, or a product-level choice that cannot be resolved from the repository.
+
+Keep PROJECT_STATE.md, IMPLEMENTATION_BACKLOG.md, CHANGELOG.md, and ADRs accurate as you work.
+
+Do not redesign this into a fixed multi-agent workflow. Preserve the central product invariant: persistent Conversation Tree and transient Execution Tree are separate, and any saved historical conversation node should be able to become the root of a new independent future.
+
+When a documented assumption conflicts with observed runtime behavior, prefer observed behavior, document the evidence, update the architecture, and continue.
+
+Begin now with Phase 0.
