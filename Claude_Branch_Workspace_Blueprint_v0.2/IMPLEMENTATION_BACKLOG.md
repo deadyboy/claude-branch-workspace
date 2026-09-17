@@ -56,19 +56,27 @@ Gate demos verified live (2026-09-17, real gateway):
 - Verified `--session-id <valid-uuid>` pins `system:init` session_id = control-plane UUID. No-prompt resume/fork emits no init (must carry a prompt). `resumeSession` registration-only.
 
 ### Phase-0-recommended P2 tests
-- [ ] Interrupt/reconnect automated test (SIGTERM mid-turn → process ends, session id resumable, event stream reconciled) — seed: `scripts/interrupt-probe.mjs` (deferred to Phase 3 with long-lived process mgmt)
-- [ ] Execution-tree attribution test (map wrapper hook events + tool-use ids + task_* to owner branch/turn; transient AgentRuns never become branches) (Phase 3)
+- [ ] Interrupt/reconnect automated test (SIGTERM mid-turn → process ends, session id resumable, event stream reconciled) — seed: `scripts/interrupt-probe.mjs` (deferred to P5/P6 with long-lived process mgmt)
+- [x] Execution-tree attribution: production-pipeline live test (`attribution-live.test.mjs`: `CBW_LIVE=1`) — every event attributed to owner branch/turn; subagent materialized as transient AgentRun; AgentRuns never become branches (Phase 3)
 
 ## P3 — Events + Agents
 
-- [ ] Hook receiver (stream-json `--include-hook-events` from child)
-- [ ] event normalization
-- [ ] event persistence
-- [ ] transient AgentRun model
-- [ ] execution tree
-- [ ] event redaction
-- [ ] backpressure/batching
-- [ ] out-of-order event tests
+- [x] Hook receiver (adapter runs `--include-hook-events`; `parseEvent` maps `system:task_*` with real fields — task_id/tool_use_id/subagent_type/description/status/summary, live-probed 2026-09-17)
+- [x] event normalization (`@cbw/event-protocol` `TurnObserver`: runtime events → canonical `CanonicalEvent` envelope, attributed to branch/node/agent-run)
+- [x] event persistence (domain `events` table + `recordEvent`; redacted payload only)
+- [x] transient AgentRun model (domain `agent_runs` + `openAgentRun`/`completeAgentRun`; execution tree `getExecutionTree`; NEVER promoted to branches)
+- [x] execution tree (domain ExecutionTree; control-plane `branch-runner` materializes runs with parent linkage; demo prints it)
+- [x] event redaction (`@cbw/event-protocol/redact.ts`: allowlist + deep scrub; unit-tested)
+- [x] realtime stream (`@cbw/event-protocol/EventBus`: publish/subscribe + per-branch + replay; unit-tested)
+- [x] out-of-order event tests (late tool_result still maps by toolUseId; task_updated ignored)
+
+Deferred to P4 (UI/backpressure): batching/flush policy for high-volume event streams (agent event volume is modest per turn; bus retains 2000-event replay window).
+
+Phase-3 review fixes (independent review FAIL→PASS, record `docs/generated/PHASE3_REVIEW.md`):
+- [x] Redaction: secret-shaped values now scrubbed anywhere in string (Bash command / assistant text / agent summary); env assignment of a secret-shaped value redacted
+- [x] FK: persist hook lazily materializes the parent main run when a task arrives first
+- [x] Main run completes at `session.stopped` (was perpetually `running`)
+- [x] `getRuntimeSession` explicit `col AS camel` select (no SELECT *)
 
 ## P4 — UI
 

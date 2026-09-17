@@ -1,5 +1,18 @@
 # Changelog
 
+## Phase 3 — Events & Execution Tree (2026-09-17)
+
+- Built `packages/event-protocol` (@cbw/event-protocol): canonical event envelope + types (`CanonicalEvent`, `CanonicalType`, event status, AgentRunFrame, ExecutionRoot), `buildRedactedPayload` (per-type allowlist + deep `scrub()`), in-process `EventBus` (global + per-branch subscribe with 2000-event replay), `TurnObserver` mapping runtime events → canonical events attributed to branch/turn/agent-run.
+- Adapter (runtime) runs `--include-hook-events`; `parseEvent` maps the full `system:task_*` surface (task_id/tool_use_id/subagent_type/description/status/summary — live-probed). thinking_tokens excluded upstream (hidden chain-of-thought never reaches UI/persistence).
+- Domain: `events` table + `recordEvent` (redacted payload only, FK to branch/node/session/agent-run); `agent_runs` table (SCHEMA_VERSION 2: `type`/`display_label`/`name`/`status`/`ended_at` + indexes) + `openAgentRun`/`completeAgentRun`/`getAgentRun`/`listAgentRunsByBranch`/`listAgentRunsByNode`; `getExecutionTree` builds the transient per-turn execution tree rooted at the anonymous main run, children via `parentAgentRunId`.
+- Control plane `startBranch`/`runTurn`: production wiring — persists `runtime_sessions` mapping before any turn (FK-resolvable session key), materializes owning agent runs lazily (parents on demand), records redacted events, completes runs at terminal events, closes main at `session.stopped`.
+- Redaction defense-in-depth: per-tool input allowlist + deep scrub; secrets scrubbed anywhere in Bash commands / assistant text / agent summaries; env assignment of a secret-shaped value redacted; benign `export NOT_A_KEY=…` and ordinary commands preserved.
+- Demo `apps/control-plane/scripts/runtime-demo.mjs` runs a real branch turn (Glob + Explore subagent) through the production pipeline and prints the persisted-event digest + execution tree.
+- Hermetic suite 33/33 green (incl. redaction-in-Bash, task-first FK, main-completion regressions); live gates (opt-in `CBW_LIVE=1`): demo PASS — 9 canonical events all attributed `node=y run=y`, execution tree `main:Main [completed] → subagent:Explore [completed]`, registry stays 1.
+- Live-discovery: 300s default turn timeout could fire mid-turn under parallel gateway load; raised to 600s + separate 120s start-turn timeout, threaded through `runTurn`/`spawnOnce`.
+- Independent review FAIL→PASS (records in `docs/generated/PHASE3_REVIEW.md`): secret-in-Bash leak (BLOCKER), task-first FK crash (BLOCKER), main-never-completes (MAJOR), unredacted text/summary (MAJOR), `SELECT *` aliasing (MINOR) — all fixed with regression tests.
+- Phase 3 Gate PASS.
+
 ## Blueprint v0.2 — 2026-09-17
 
 - Added executable project entrypoint.

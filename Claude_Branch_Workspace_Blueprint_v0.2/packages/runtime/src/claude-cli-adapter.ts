@@ -96,7 +96,9 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     private claudeBin = process.env.CBW_CLAUDE_BIN ?? "claude",
     private argvPrefix: string[] = [],
     private persistence?: RuntimePersistence,
-    private turnTimeoutMs = 300_000
+    private turnTimeoutMs = 600_000,
+    /** Timeout for the session warm-up (start) turn, which has no subagents. */
+    private startTurnTimeoutMs = 120_000
   ) {
     const gw = readGatewayEnv();
     this.baseUrl = gw.baseUrl;
@@ -140,10 +142,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
   private async spawnOnce(
     args: string[],
     cwd: string,
-    sessionId: string
+    sessionId: string,
+    timeoutMs: number = this.turnTimeoutMs
   ): Promise<{ child: ChildProcess; events: RuntimeEvent[]; stderr: string }> {
     const settingsPath = this.writeSessionSettings(cwd, sessionId);
-    const fullArgs = ["--print", "--include-partial-messages", ...args, "--settings", settingsPath];
+    const fullArgs = ["--print", "--include-partial-messages", "--include-hook-events", ...args, "--settings", settingsPath];
     const proc = spawn(this.claudeBin, [...this.argvPrefix, ...fullArgs], {
       cwd,
       env: this.env,
@@ -173,14 +176,13 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       // A dead/hung gateway (or a child awaiting interactive input) must not
       // block the control plane forever: kill after turnTimeoutMs and surface
       // an error instead of an infinite await.
-      const turnTimeoutMs = this.turnTimeoutMs;
       const timer = setTimeout(() => {
         if (proc.exitCode === null && !proc.killed) {
           try { proc.kill("SIGTERM"); } catch { /* already gone */ }
         }
-        const reason = `turn timed out after ${turnTimeoutMs}ms (gateway unreachable or child hung)`;
+        const reason = `turn timed out after ${timeoutMs}ms (gateway unreachable or child hung)`;
         finish(new Error(reason));
-      }, turnTimeoutMs);
+      }, timeoutMs);
       proc.stdout.on("data", (chunk: Buffer) => {
         buf += chunk.toString();
         let idx = buf.indexOf("\n");
@@ -230,7 +232,8 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       input.sessionId,
       ["--session-id", input.sessionId],
       new Map(),
-      startPrompt
+      startPrompt,
+      this.startTurnTimeoutMs
     );
     const ext = child.initId;
     const s: ManagedSession = { externalSessionId: ext, cwd: input.cwd, running: false };
@@ -349,11 +352,12 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     sessionKey: string,
     extraArgs: string[],
     envExtras: Map<string, string>,
-    prompt?: string
+    prompt?: string,
+    timeoutMs: number = this.turnTimeoutMs
   ): Promise<{ initId: string; version?: string; events: RuntimeEvent[] }> {
     const args = [...extraArgs, "--verbose", "--output-format", "stream-json"];
     if (prompt !== undefined) args.push(prompt);
-    const { child, events, stderr } = await this.spawnOnce(args, cwd, sessionKey);
+    const { child, events, stderr } = await this.spawnOnce(args, cwd, sessionKey, timeoutMs);
     void child;
     const init = events.find((e) => e.kind === "init") as { kind: "init"; externalSessionId: string; runtimeVersion?: string } | undefined;
     if (!init) throw new Error(`no init event; got ${events.map((e) => e.kind).join(",")}; stderr: ${stderr.slice(0, 500)}`);
@@ -368,13 +372,20 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
           return { kind: "init", externalSessionId: String(ev.session_id), runtimeVersion: ev.runtime_version };
         }
         if (ev.subtype === "thinking_tokens") return null; // hidden chain-of-thought: never surface
-        // system:task_* / background_tasks_changed belong to the execution tree.
+        // system:task_* / background_tasks_changed belong to the execution tree
+        // (Phase 3). Real surface (probe 2026-09-17): task_id, tool_use_id,
+        // subagent_type, description, status, summary, uuid, session_id.
         if (typeof ev.subtype === "string" && ev.subtype.startsWith("task_")) {
           return {
             kind: "task",
-            id: String(ev.uuid ?? ev.subtask_uuid ?? ev.session_id ?? ev.subtype),
+            id: String(ev.task_id ?? ev.uuid ?? ev.subtask_uuid ?? ev.session_id ?? ev.subtype),
             type: ev.subtype,
             status: typeof ev.status === "string" ? ev.status : undefined,
+            taskId: typeof ev.task_id === "string" ? ev.task_id : undefined,
+            toolUseId: typeof ev.tool_use_id === "string" ? ev.tool_use_id : undefined,
+            subagentType: typeof ev.subagent_type === "string" ? ev.subagent_type : undefined,
+            description: typeof ev.description === "string" ? ev.description : undefined,
+            summary: typeof ev.summary === "string" ? ev.summary : undefined,
           };
         }
         if (ev.subtype === "background_tasks_changed") {

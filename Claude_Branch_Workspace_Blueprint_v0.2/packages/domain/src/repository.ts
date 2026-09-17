@@ -4,6 +4,7 @@ import type {
   Branch,
   BranchContextSnapshot,
   ConversationNode,
+  DomainEvent,
   Message,
   Project,
   RuntimeSession,
@@ -28,6 +29,10 @@ const NODE_COLS = `id, project_id AS projectId, branch_id AS branchId, parent_no
   status, created_at AS createdAt, completed_at AS completedAt`;
 const MESSAGE_COLS = `id, node_id AS nodeId, branch_id AS branchId, role,
   visible_content AS visibleContent, runtime_message_id AS runtimeMessageId, seq, created_at AS createdAt`;
+const AGENT_RUN_COLS = `id, owner_branch_id AS ownerBranchId, owner_node_id AS ownerNodeId,
+  parent_agent_run_id AS parentAgentRunId, runtime_agent_id AS runtimeAgentId,
+  type, display_label AS displayLabel, name, task_summary AS taskSummary,
+  status, started_at AS startedAt, ended_at AS endedAt`;
 
 // Thin prepared-statement access over the raw tables. No domain rules here;
 // invariants live in DomainService.
@@ -221,17 +226,85 @@ export class Repository {
     };
   }
 
-  // ---- agent runs / runtime sessions (reserved for later phases) ----
+  // ---- events (canonical, redacted) ----
+  insertEvent(e: DomainEvent): void {
+    this.db
+      .prepare(
+        `INSERT INTO events (
+           id, project_id, branch_id, node_id, agent_run_id, runtime_session_id,
+           type, status, sequence, occurred_at, received_at, payload_json_redacted
+         ) VALUES (
+           @id, @projectId, @branchId, @nodeId, @agentRunId, @runtimeSessionId,
+           @type, @status, @sequence, @occurredAt, @receivedAt, @payloadJsonRedacted
+         )`
+      )
+      .run(e);
+  }
+  listEventsByBranch(branchId: string): DomainEvent[] {
+    return this.db
+      .prepare(
+        `SELECT id, project_id AS projectId, branch_id AS branchId, node_id AS nodeId,
+                agent_run_id AS agentRunId, runtime_session_id AS runtimeSessionId,
+                type, status, sequence, occurred_at AS occurredAt, received_at AS receivedAt,
+                payload_json_redacted AS payloadJsonRedacted
+         FROM events WHERE branch_id = ? ORDER BY received_at, sequence`
+      )
+      .all(branchId) as DomainEvent[];
+  }
+
+  // ---- agent runs (execution tree) ----
   insertAgentRun(a: AgentRun): void {
     this.db
       .prepare(
         `INSERT INTO agent_runs (
            id, owner_branch_id, owner_node_id, parent_agent_run_id, runtime_agent_id,
-           type, task_summary, status, started_at, ended_at
-         ) VALUES (@id, @ownerBranchId, @ownerNodeId, @parentAgentRunId, @runtimeAgentId,
-           @type, @taskSummary, @status, @startedAt, @endedAt)`
+           type, display_label, name, task_summary, status, started_at, ended_at
+         ) VALUES (
+           @id, @ownerBranchId, @ownerNodeId, @parentAgentRunId, @runtimeAgentId,
+           @type, @displayLabel, @name, @taskSummary, @status, @startedAt, @endedAt
+         )`
       )
       .run(a);
+  }
+  updateAgentRunStatus(id: string, status: AgentRun["status"], endedAt: string | null): void {
+    this.db
+      .prepare(`UPDATE agent_runs SET status = ?, ended_at = ? WHERE id = ?`)
+      .run(status, endedAt, id);
+  }
+  updateAgentRun(a: AgentRun): void {
+    this.db
+      .prepare(
+        `UPDATE agent_runs SET
+           owner_branch_id=@ownerBranchId, owner_node_id=@ownerNodeId,
+           parent_agent_run_id=@parentAgentRunId, runtime_agent_id=@runtimeAgentId,
+           type=@type, display_label=@displayLabel, name=@name,
+           task_summary=@taskSummary, status=@status, started_at=@startedAt, ended_at=@endedAt
+         WHERE id=@id`
+      )
+      .run(a);
+  }
+  getAgentRun(id: string): AgentRun | null {
+    return (
+      (this.db
+        .prepare(
+          `SELECT ${AGENT_RUN_COLS} FROM agent_runs WHERE id = ?`
+        )
+        .get(id) as AgentRun | undefined) ?? null
+    );
+  }
+  listAgentRunsByBranch(branchId: string): AgentRun[] {
+    return this.db
+      .prepare(
+        `SELECT ${AGENT_RUN_COLS} FROM agent_runs WHERE owner_branch_id = ? ORDER BY started_at`
+      )
+      .all(branchId) as AgentRun[];
+  }
+  listAgentRunsByNode(nodeId: string): AgentRun[] {
+    return this.db
+      .prepare(
+        `SELECT ${AGENT_RUN_COLS} FROM agent_runs WHERE owner_node_id = ? ORDER BY started_at`
+      )
+      .all(nodeId) as AgentRun[];
   }
   insertRuntimeSession(s: RuntimeSession): void {
     this.db
@@ -274,36 +347,28 @@ export class Repository {
   getRuntimeSession(id: string): RuntimeSession | null {
     return (
       (this.db
-        .prepare(`SELECT * FROM runtime_sessions WHERE id = ?`)
-        .get(id) as unknown as RuntimeSession | undefined) ?? null
+        .prepare(`SELECT ${RUNTIME_SESSION_COLS} FROM runtime_sessions WHERE id = ?`)
+        .get(id) as RuntimeSession | undefined) ?? null
     );
   }
 
   getRuntimeSessionByExternalId(externalSessionId: string): RuntimeSession | null {
-    const row = this.db
-      .prepare(`SELECT * FROM runtime_sessions WHERE external_session_id = ? LIMIT 1`)
-      .get(externalSessionId) as
-      | {
-          id: string;
-          branch_id: string;
-          adapter_type: string;
-          external_session_id: string | null;
-          runtime_version: string | null;
-          status: string;
-          last_seen_at: string;
-          metadata_json: string;
-        }
-      | undefined;
-    if (!row) return null;
-    return {
-      id: row.id,
-      branchId: row.branch_id,
-      adapterType: row.adapter_type,
-      externalSessionId: row.external_session_id,
-      runtimeVersion: row.runtime_version,
-      status: row.status as RuntimeSession["status"],
-      lastSeenAt: row.last_seen_at,
-      metadataJson: row.metadata_json,
-    };
+    return (
+      (this.db
+        .prepare(`SELECT ${RUNTIME_SESSION_COLS} FROM runtime_sessions WHERE external_session_id = ? LIMIT 1`)
+        .get(externalSessionId) as RuntimeSession | undefined) ?? null
+    );
   }
 }
+
+// snake_case -> camelCase aliased exactly once (constitution-mandated).
+const RUNTIME_SESSION_COLS = `
+  id,
+  branch_id AS branchId,
+  adapter_type AS adapterType,
+  external_session_id AS externalSessionId,
+  runtime_version AS runtimeVersion,
+  status,
+  last_seen_at AS lastSeenAt,
+  metadata_json AS metadataJson
+`;

@@ -1,11 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { Repository } from "./repository.js";
 import type {
+  AgentRun,
   Branch,
   BranchContextSnapshot,
   ConversationNode,
+  DomainEvent,
+  ExecutionNode,
+  ExecutionTree,
   Message,
   Project,
+  RuntimeSession,
 } from "./types.js";
 
 export class DomainError extends Error {
@@ -161,6 +166,29 @@ export class DomainService {
     return this.repo.getBranch(branchId);
   }
 
+  /** Persist/refresh the control-plane session mapping (single fact source). */
+  upsertRuntimeSession(input: {
+    id: string;
+    branchId: string;
+    adapterType: string;
+    externalSessionId: string | null;
+    runtimeVersion?: string | null;
+    status: string;
+    lastSeenAt: string;
+    metadataJson?: string;
+  }): void {
+    this.repo.upsertRuntimeSession({
+      id: input.id,
+      branchId: input.branchId,
+      adapterType: input.adapterType,
+      externalSessionId: input.externalSessionId,
+      runtimeVersion: input.runtimeVersion ?? null,
+      status: input.status as RuntimeSession["status"],
+      lastSeenAt: input.lastSeenAt,
+      metadataJson: input.metadataJson ?? "{}",
+    });
+  }
+
   getNode(nodeId: string): ConversationNode | null {
     return this.repo.getNode(nodeId);
   }
@@ -310,6 +338,129 @@ export class DomainService {
 
   getWorkspaceBinding(branchId: string): { mode: "shared" | "worktree"; path: string | null } | null {
     return this.repo.getWorkspaceBinding(branchId);
+  }
+
+  // ---- execution tree (transient AgentRuns, never persistent branches) ----
+
+  /**
+   * Open an AgentRun that is executing inside a branch turn. AgentRuns are
+   * transient — they are observability objects owned by a branch turn, never
+   * promoted to persistent Conversation Branches (constitution §1).
+   */
+  openAgentRun(input: {
+    id?: string;
+    ownerBranchId: string;
+    ownerNodeId?: string | null;
+    parentAgentRunId?: string | null;
+    runtimeAgentId?: string | null;
+    type: string;
+    displayLabel?: string | null;
+    name?: string | null;
+    taskSummary?: string | null;
+    status?: AgentRun["status"];
+    startedAt?: string | null;
+  }): AgentRun {
+    const b = this.repo.getBranch(input.ownerBranchId);
+    if (!b) throw new DomainError(`branch ${input.ownerBranchId} not found`);
+    const at = input.startedAt ?? this.now();
+    const run: AgentRun = {
+      id: input.id ?? randomUUID(),
+      ownerBranchId: input.ownerBranchId,
+      ownerNodeId: input.ownerNodeId ?? null,
+      parentAgentRunId: input.parentAgentRunId ?? null,
+      runtimeAgentId: input.runtimeAgentId ?? null,
+      type: input.type,
+      displayLabel: input.displayLabel ?? null,
+      name: input.name ?? null,
+      taskSummary: input.taskSummary ?? null,
+      status: input.status ?? "running",
+      startedAt: at,
+      endedAt: null,
+    };
+    this.repo.insertAgentRun(run);
+    return run;
+  }
+
+  completeAgentRun(id: string, status: AgentRun["status"], endedAt?: string | null): AgentRun | null {
+    const at = endedAt ?? this.now();
+    const run = this.repo.getAgentRun(id);
+    if (!run) return null;
+    this.repo.updateAgentRunStatus(id, status, at);
+    return this.repo.getAgentRun(id);
+  }
+
+  getAgentRun(id: string): AgentRun | null {
+    return this.repo.getAgentRun(id);
+  }
+
+  listAgentRunsByBranch(branchId: string): AgentRun[] {
+    return this.repo.listAgentRunsByBranch(branchId);
+  }
+
+  /**
+   * Build the execution tree for a turn: the transient agent-run hierarchy
+   * rooted at the main run of that node. Every run is owned by a branch turn;
+   * none are branches themselves.
+   */
+  getExecutionTree(branchId: string, nodeId: string | null): ExecutionTree | null {
+    const runs = this.repo.listAgentRunsByNode(nodeId ?? "");
+    if (!runs.length && !nodeId) return null;
+
+    // root = the earliest main run of the node, else first run.
+    const main = runs.find((r) => r.type === "main") ?? runs[0];
+
+    const childrenBy = new Map<string, AgentRun[]>();
+    for (const r of runs) {
+      if (r.id === main?.id) continue;
+      const list = childrenBy.get(r.parentAgentRunId ?? "") ?? [];
+      list.push(r);
+      childrenBy.set(r.parentAgentRunId ?? "", list);
+    }
+
+    const build = (r: AgentRun): ExecutionNode => ({
+      agentRun: r,
+      children: (childrenBy.get(r.id) ?? []).sort((a, b) => a.startedAt.localeCompare(b.startedAt)).map(build),
+    });
+
+    if (!main) return null;
+    return { sessionKey: "", branchId, nodeId, root: build(main) };
+  }
+
+  // ---- canonical events (redacted payload) ----
+
+  recordEvent(input: {
+    projectId: string;
+    branchId: string;
+    nodeId?: string | null;
+    agentRunId?: string | null;
+    runtimeSessionId?: string | null;
+    type: string;
+    status?: DomainEvent["status"];
+    occurredAt: string;
+    receivedAt?: string | null;
+    payloadJsonRedacted: string;
+    sequence?: number | null;
+  }): DomainEvent {
+    const ev: DomainEvent = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      branchId: input.branchId,
+      nodeId: input.nodeId ?? null,
+      agentRunId: input.agentRunId ?? null,
+      runtimeSessionId: input.runtimeSessionId ?? null,
+      type: input.type,
+      status: input.status ?? null,
+      sequence: input.sequence ?? null,
+      occurredAt: input.occurredAt,
+      receivedAt: input.receivedAt ?? this.now(),
+      payloadJsonRedacted: input.payloadJsonRedacted,
+    };
+    this.repo.insertEvent(ev);
+    return ev;
+  }
+
+  listEventsByBranch(branchId: string): DomainEvent[] {
+    return this.repo.listEventsByBranch(branchId);
   }
 
   private collectLineage(node: ConversationNode, acc: ConversationNode[]): void {

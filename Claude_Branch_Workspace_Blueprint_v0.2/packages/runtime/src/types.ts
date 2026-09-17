@@ -33,7 +33,19 @@ export type RuntimeEvent =
   | { kind: "tool_result"; toolUseId?: string; isError?: boolean }
   | { kind: "subagent_start"; name?: string; id?: string }
   | { kind: "subagent_stop"; id?: string }
-  | { kind: "task"; id: string; type: string; status?: string }
+  | {
+      kind: "task";
+      id: string;
+      type: string; // task_started | task_updated | task_notification | ...
+      status?: string;
+      // Phase 3: fields from the real stream-json task_* surface (live-probed
+      // 2026-09-17): task_id, tool_use_id, subagent_type, description, summary.
+      taskId?: string;
+      toolUseId?: string;
+      subagentType?: string;
+      description?: string;
+      summary?: string;
+    }
   | { kind: "result"; stopReason?: string; exitCode?: number; sequence?: unknown }
   | { kind: "error"; message: string };
 

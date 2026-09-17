@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 
 export type Db = Database.Database;
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 // Versioned migrations, applied in order. Each entry upgrades the DB from
 // version N-1 to N. Idempotent within a transaction per version.
@@ -140,6 +140,25 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
           workspace_binding_json TEXT,
           created_at     TEXT NOT NULL
         );
+      `);
+    },
+  },
+  {
+    // Phase 3: execution tree. agent_runs/events existed in v1 but were
+    // unused; this migration adds the fields the execution tree needs
+    // (status, display_label, kind/name, parent linkage) and an events.status
+    // column so canonical event status (started/completed/failed/cancelled)
+    // survives alongside the event type.
+    version: 2,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE agent_runs ADD COLUMN display_label TEXT;
+        ALTER TABLE agent_runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'subagent';
+        ALTER TABLE agent_runs ADD COLUMN name TEXT;
+        ALTER TABLE events ADD COLUMN status TEXT;
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_agent_run_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_runs_type ON agent_runs(type);
+        CREATE INDEX IF NOT EXISTS idx_events_agentrun ON events(agent_run_id);
       `);
     },
   },

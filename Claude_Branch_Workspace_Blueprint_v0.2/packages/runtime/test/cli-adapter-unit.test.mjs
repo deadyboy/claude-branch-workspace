@@ -129,7 +129,7 @@ test("timeout: a hung child surfaces an error instead of hanging forever", async
   const hangCwd = tmpdir();
   try {
     const [fakeBin, fakeScript] = writeHangFakeClaude(scriptDir);
-    const adapter = new ClaudeCliAdapter(fakeBin, [fakeScript], undefined, 2000);
+    const adapter = new ClaudeCliAdapter(fakeBin, [fakeScript], undefined, 2000, 2000);
     await assert.rejects(
       adapter.startSession({ sessionId: "hg-1", cwd: hangCwd, workspaceMode: "shared" }),
       /timed|timeout/i,

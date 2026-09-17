@@ -7,3 +7,4 @@ export {
   type AncestryResult,
   type ConversationTreeNode,
 } from "./domain-services.js";
+export { SCHEMA_VERSION } from "./db.js";

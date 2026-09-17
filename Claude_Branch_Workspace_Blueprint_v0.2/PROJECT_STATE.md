@@ -4,11 +4,11 @@
 
 ## Current Phase
 
-Phase 2 — GATES PASS (RuntimeAdapter + Claude CLI adapter; head-fork/restart fidelity PASS live; historical-fork reconstruction no-leak PASS live). Pending: independent review + docs + commit.
+Phase 3 — COMPLETE (gate PASS live + independent review FAIL→PASS; committed after review-fix cycle)
 
 ## Current Objective
 
-Phase 2: real Claude Runtime Adapter, verified live against the desktop gateway (`packages/runtime`). Both required demos pass live. Next: dispatch independent reviewer, update CHANGELOG/backlog, commit Phase 2, then Phase 3 (events + execution tree).
+Phase 4: UI — conversation tree, current-branch chat, fork-from-turn action, branch breadcrumb/rename, agent monitor, event timeline, permission/attention state, restart/reconnect UX (backlog P4, deferred batching policy lands here).
 
 ## Verified Facts (all locally verified 2026-09-17, Claude Code v2.1.226, Win11/Git Bash)
 
@@ -22,6 +22,8 @@ Phase 2: real Claude Runtime Adapter, verified live against the desktop gateway 
 - Fork-from-arbitrary-turn has **no native CLI** → strategy = reconstruction (ADR-006). Automated no-leak proof PASSES with per-branch isolated cwd + auto-memory disabled: child knows turn≤N only, root unmutated, no cross-branch future memory.
 - Event surface: `--print --verbose --include-hook-events --output-format=stream-json` → `system:init`(session_id) + PreToolUse/PostToolUse + SubagentStart/Stop + task_* + assistant tool_use + user tool_result + background_tasks_changed + thinking_tokens(ephemeral, excluded). Hook wrappers carry empty payloads; real tool detail comes from tool_use/tool_result records.
 - Worktree: `--worktree` creates real isolated git worktree; shared = plain cwd.
+- Phase 3 live-discovery (2026-09-17): persisting canonical events against a REAL gateway exposes an FK constraint that hermetic fakes hide — `insertEvent` rejects `runtime_session_id`/`agent_run_id` values that aren't rows. Root cause: the demo was re-implementing the pipeline instead of calling the production `startBranch`/`runTurn` (which resolve `runtime_sessions.id` and materialize agent runs first). Fixed by routing the demo + live test through the production path. Lesson: live gate must exercise the exact production wiring, not a hand-rolled twin.
+- Live turn latency hazard (2026-09-17): a demo turn spawns `startSession` warm-up + `sendMessage` resume run; BOTH capped by `turnTimeoutMs`, so under parallel load (main session + reviewer subagent sharing the gateway) a 300s default could time out mid-turn. Fix: raised `turnTimeoutMs` default to 600s, added a separate `startTurnTimeoutMs` (120s warm-up), threaded `timeoutMs` through `runTurn`/`spawnOnce`. Hermetic timeout test updated to inject both.
 
 ## Open Blockers
 
@@ -38,13 +40,14 @@ Phase 2: real Claude Runtime Adapter, verified live against the desktop gateway 
 
 ## Last Completed Gate
 
-Phase 2 Gate — PASS (live, real gateway):
-- Restart fidelity: Main real session → 4 turns → fork-from-head → child → Main turn 5 → child independent → grandchild → fresh adapter (simulated restart) resumes all 3 on same external id → Main/Child continue with context (SURVIVED_MAIN / SURVIVED_CHILD) → duplicate-name non-interference. 219s.
-- Historical fork (Scenario A): seed child via reconstruction (ADR-006) from turns 1–2 only → child remembers turn 2 (TWO), has NO turn-3 secret (THREE) → no post-fork context leak. 283s.
-- Hermetic: 13/13 domain + 2/2 runtime unit green; live tests skip without `CBW_LIVE=1`.
+Phase 3 Gate — PASS (live, real gateway; committed after independent review FAIL→PASS):
+- Live demo: one branch turn using Glob tool + one Explore subagent, observed end-to-end through `startBranch`/`runTurn` → observer → EventBus + domain DB. Execution tree rooted at completed `main:Main` with completed `subagent:Explore`; persisted event digest all attributed `node=y run=y`; registry stays at 1 (AgentRuns transient, never branches).
+- Reviewer FAIL→PASS: BLOCKERs fixed — (1) secret key inside a Bash command leaked verbatim (allowlist + whole-string-only scrub); now scrubbed anywhere in a string / summary / text; (2) FK crash when the first event was `task_started` (parent main not materialized) — persist hook now lazily creates the parent main. MAJORs fixed — main run now completes at `session.stopped`; assistant text + agent summary routed through `scrub()`. MINOR fixed — `getRuntimeSession` SELECT * → explicit `col AS camel`.
+- Hermetic: 33/33 green (incl. new regression tests for redaction-in-Bash, task-first FK, main completion); 3 live tests skip without `CBW_LIVE=1`.
+- Live-discovery: 300s turn timeout under parallel gateway load (this session + reviewer) could fire mid-turn; raised `turnTimeoutMs` default to 600s + separate `startTurnTimeoutMs` (120s warm-up), threaded through `runTurn`/`spawnOnce`.
+- Record: `docs/generated/PHASE3_REVIEW.md`.
 
 ## Next Actions
 
-1. Independent Phase 2 review (per constitution §6) — dispatch reviewer, resolve findings.
-2. Update CHANGELOG.md + IMPLEMENTATION_BACKLOG.md (mark ClaudeCliAdapter/session/fork/faithful historical-fork DONE) + commit Phase 2.
-3. Phase 3: events + execution tree (hook receiver, event normalization/persistence, transient AgentRun, execution-tree attribution).
+1. Phase 4: UI — conversation tree, current-branch chat, fork-from-turn, branch breadcrumb/rename, agent monitor, event timeline, permission/attention, restart/reconnect UX (backlog P4; deferred batching/flush policy lands here).
+2. Interrupt/reconnect with long-lived process management (deferred, Phase 5/6 with the MCP control surface).

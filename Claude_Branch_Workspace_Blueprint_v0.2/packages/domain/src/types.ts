@@ -91,11 +91,44 @@ export interface AgentRun {
   ownerNodeId: UUID | null;
   parentAgentRunId: UUID | null;
   runtimeAgentId: string | null;
-  type: string;
+  type: string; // e.g. "subagent" | "task" | "main"
+  displayLabel: string | null;
+  name: string | null;
   taskSummary: string | null;
   status: AgentRunStatus;
   startedAt: string;
   endedAt: string | null;
+}
+
+// Canonical event as persisted (docs/04 §3). payload is the REDACTED payload.
+export type DomainEventStatus = "started" | "completed" | "failed" | "cancelled";
+
+export interface DomainEvent {
+  id: UUID;
+  projectId: UUID;
+  branchId: UUID;
+  nodeId: UUID | null;
+  agentRunId: UUID | null;
+  runtimeSessionId: string | null;
+  type: string; // canonical type, e.g. "tool.started"
+  status: DomainEventStatus | null;
+  sequence: number | null;
+  occurredAt: string;
+  receivedAt: string;
+  payloadJsonRedacted: string;
+}
+
+// Execution tree projection: the agent runs that happened during one turn.
+export interface ExecutionTree {
+  sessionKey: string;
+  branchId: UUID;
+  nodeId: UUID | null;
+  root: ExecutionNode | null;
+}
+
+export interface ExecutionNode {
+  agentRun: AgentRun;
+  children: ExecutionNode[];
 }
 
 // Branch context snapshot used for reconstruction fork (ADR-006 Option 3).
