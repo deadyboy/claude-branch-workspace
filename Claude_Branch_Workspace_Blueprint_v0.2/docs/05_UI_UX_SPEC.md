@@ -106,3 +106,21 @@ UI 使用 breadcrumb：
 - rename
 - fork
 - inspect workspace
+
+## Phase 4 data-model + UI constraints（S6 定稿）
+
+### 领域/数据模型新增（Phase 4）
+
+- **`events.seq_rel` = 项目级单调游标**（SCHEMA_VERSION 3）：任何 SELECT 一律 `seq_rel AS seqRel`（宪法 camelCase）；WS 帧、REST `?after=`、E2E timeline 共用。UI `latestSeqRel` 即最近消费游标。
+- **明确 turn 生命周期**：`openTurn` → `completeTurn` / `failTurn` / `cancelTurn`（idempotent）；`conversation_node.status ∈ pending | completed | failed | cancelled`。interrupt = `cancelled`（**不是 failed**，gate 6）。
+- **`EffectiveConversationItem {role, content, nodeId, origin:"inherited"|"local", seq}`**：fork 分支的聊天真相 = inherited 前缀（`≤ fork 点`，含）+ local（gate 3）。UI 据此渲染 `[inherited]`/`[local]` 徽标。
+- **`messages.visible_content` 是用户自写的聊天真相（gate 4）**：只在"整个回复都 secret-shaped"时整体替换；scrub 是整串替换。UI 聊天只读 `visible_content`，绝不让事件流里的 assistant 文本掩盖它。
+
+### UI 硬约束（Phase 4）
+
+- **gate 14 — Shared only**：Phase 4 UI 无 worktree 选择器；Conversation Tree 顶部固定徽标 `Shared only · Worktree = Phase 6`；每个 branch 的 workspace 模式徽标仅显示 `S`（shared）。`worktreeIsolation` 能力按真实 adapter 返回（fake `false`）。
+- **gate 9 / attribution 诚实**：工具事件只在 branch/turn 层渲染（Timeline 的 `tool.started`/`tool.completed` 行），Agent Monitor / 执行树只展示 AgentRun 的 name/task/status 组织——不宣称"某 tool 属于某 run"（`docs/04 §8`）。
+- **gate 11 / per-branch busy**：chat composer 的 busy 状态按 branch 判定（`nodesByBranch` 中该 branch 存在 `pending` node），不是全局锁。
+- **gate 6 / interrupt UX**：Interrupt 按钮只对当前 active branch 且 busy 时可用；结果 = node `cancelled`（Agent Monitor 不会永久 busy）。
+- **gate 7 / attention UX**：Timeline 顶部 `attn-pinned` 渲染 attention/permission 卡片（pending 在前，answered 用 `.attn-answered` 显示结果）；Allow/Deny → `POST /api/attention/:id/respond`。Phase 4 只由假 runtime 播种。
+- **gate 8 / reconnect**：`socketStatus` 顶栏红点（connected/connecting/offline）；reconnect = REST `?after=` 追赶 + WS gap-fill；去重集有界。

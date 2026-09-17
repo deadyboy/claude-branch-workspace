@@ -84,11 +84,22 @@ UI 使用：
 
 `Fork from here`
 
-系统调用 domain command：
+系统调用 domain command（**当前真实签名**——`packages/domain/src/domain-services.ts` `NewBranchInput`，reviewer S2 修正）：
 
-```text
-createBranchFromNode(nodeId, initialInstruction?, workspaceMode?)
+```ts
+createBranchFromNode(input: {
+  projectId: string;
+  forkFromNodeId?: string | null;   // 必填（本方法只做节点分叉；root 用 createRootConversation）
+  displayName?: string | null;      // 可选、可重名
+  originStrategy?: Branch["originStrategy"];  // "root" | "fork_head" | "fork_node" | "reconstruct"
+  workspaceMode?: Branch["workspaceMode"];    // "shared" | "worktree"
+}): Branch
 ```
+
+- **`createRootConversation`** 负责建 root；`createBranchFromNode` 只做"从指定节点分叉"。
+- **无 `initialInstruction` 参数**：ADR-006 用 `visibleMessages` 播种重建，**不伪造指令**；snapshot 的 `projectInstructions` 恒为 `null`。旧文档的 `createBranchFromNode(nodeId, initialInstruction?, workspaceMode?)` 属于过时签名。
+- **不可变 snapshot**：`createBranchFromNode` 在创建时同步 `captureBranchContext(b, forkNode)`，持久化 `branch_context_snapshots`（`ancestorNodeIds` + `visibleMessages`）+ 冻结 fork 点；**gate 1 frozen fork** —— 子分支此后只从 snapshot/rows 派生，不读 live 父。
+- `originStrategy` 显式传入时按传入值落库；否则由 fork-orchestrator 在响应前分发/升级（head fork → `fork_head`，否则 `reconstruct`）。**写入 DB 的是策略字段**（见 `docs/10 §2`）。
 
 Runtime 层决定实际策略。
 
