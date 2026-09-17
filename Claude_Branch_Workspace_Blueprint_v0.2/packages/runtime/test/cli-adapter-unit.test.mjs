@@ -108,6 +108,66 @@ test("parseEvent: nested tool_use/tool_result + task_* are parsed; unrelated eve
   await adapter.terminate("tt-1");
 });
 
+// A fork-aware fake: when --fork-session is on the argv it reports a DISTINCT
+// external session id (mirroring the live CLI's monotonic identity for a native
+// fork-from-head). Hermetic stand-in for the CBW_LIVE-gated fork-fidelity test.
+function writeForkFakeClaude(dir) {
+  const bin = join(dir, "fake-fork.mjs");
+  const script = `import { stdout } from 'node:process';
+const forked = process.argv.includes('--fork-session');
+const sidIdx = process.argv.indexOf('--session-id');
+const sidArg = sidIdx !== -1 ? process.argv[sidIdx + 1] : '?';
+const ext = forked ? ('FORK-' + sidArg) : 'NORM-EXT';
+stdout.write(JSON.stringify({ type:'system', subtype:'init', session_id: ext, runtime_version:'2.1.226-fake' }) + '\\n');
+stdout.write(JSON.stringify({ type:'assistant', message:{ id:'m1', role:'assistant', content:[{ type:'text', text: forked ? 'FORKED_OK' : 'HELLO_FAKE' }] } }) + '\\n');
+stdout.write(JSON.stringify({ type:'result', is_error:false, stop_reason:'end_turn', session_id: ext }) + '\\n');
+`;
+  writeFileSync(bin, script);
+  return ["node", bin];
+}
+
+test("native fork-from-head yields a DISTINCT external session (monotonic --session-id), hermetic", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "cbw-fake-fork-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const [fakeBin, fakeScript] = writeForkFakeClaude(dir);
+  const adapter = new ClaudeCliAdapter(fakeBin, [fakeScript]);
+
+  const parent = await adapter.startSession({ sessionId: "fp-1", cwd: dir, workspaceMode: "shared" });
+  assert.equal(parent.externalSessionId, "NORM-EXT", "parent session external id");
+
+  const childKey = "fp-2";
+  const child = await adapter.forkFromHead("fp-1", { newSessionId: childKey, cwd: dir });
+  // The fork fake spawns with --fork-session --session-id <childKey>, so the
+  // CLI reports a NEW external id distinct from the parent (identity monotonic).
+  assert.notEqual(child.externalSessionId, parent.externalSessionId, "child external id differs from parent");
+  assert.equal(child.sessionKey, childKey, "child registered under the fresh control-plane key");
+
+  // Both sessions can run independently afterwards (later parent progress must
+  // not collapse the child onto the parent live stream).
+  const parentEvents = [];
+  for await (const ev of adapter.sendMessage("fp-1", { text: "parent again" })) parentEvents.push(ev);
+  assert.ok(parentEvents.some((e) => e.kind === "assistant"), "parent still runs after the fork");
+
+  const childEvents = [];
+  for await (const ev of adapter.sendMessage(childKey, { text: "child turn" })) childEvents.push(ev);
+  assert.ok(childEvents.some((e) => e.kind === "assistant"), "child runs independently after the fork");
+
+  await adapter.terminate("fp-1");
+  await adapter.terminate(childKey);
+});
+
+// Structural pin (hermetic, no gateway): the real adapter's forkFromHead must
+// pass --fork-session with the fresh --session-id — never a bare resume.
+test("adapter structural: forkFromHead uses --fork-session + fresh --session-id (native identity)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../dist/claude-cli-adapter.js", import.meta.url), "utf8");
+  const fn = src.slice(src.indexOf("async forkFromHead"));
+  const fnBody = fn.slice(0, fn.indexOf("async reconstructBranchFromHistory"));
+  assert.ok(fnBody.includes("--fork-session"), "forkFromHead passes --fork-session");
+  assert.ok(fnBody.includes("--session-id"), "forkFromHead passes a fresh --session-id");
+  assert.ok(fnBody.includes("Awaiting instructions"), "fork carries a real prompt (probe: no-prompt fork exits 1)");
+});
+
 // A fake that never emits result and never exits: the adapter must surface a
 // timeout error (SIGTERM + reject) instead of hanging forever (review MAJOR #3).
 function writeHangFakeClaude(dir) {

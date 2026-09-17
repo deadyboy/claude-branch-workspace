@@ -4,7 +4,7 @@
 
 ## Current Phase
 
-Phase 3 — COMPLETE (gate PASS live + independent review FAIL→PASS; committed after review-fix cycle)
+Phase 4 — COMPLETE, Gate PASS (independent review FAIL→PASS, reviewer APPROVE — `docs/generated/PHASE4_REVIEW.md`). S1–S8 all DONE/GREEN: domain 32/32, event-protocol 13/13, runtime 9+2 live-skip, control-plane 29+1 live-skip, Playwright E2E golden path PASS. Implementation record: `PHASE4_HANDOFF.md`. Next: Phase 5 (MCP control surface).
 
 ## Current Objective
 
@@ -40,6 +40,12 @@ Phase 4: UI — conversation tree, current-branch chat, fork-from-turn action, b
 
 ## Last Completed Gate
 
+Phase 4 Gate — PASS (independent review FAIL→PASS, reviewer APPROVE, 15/15 hard gates, 2026-09-17):
+- Reviewer findings → fixed: BLOCKER — gate 2 `TRANSCRIPT_ACK` reconstruction seed was dead code (`seedPrompt` built but discarded); now genuinely threads through `ForkInput.seedText` → `claude-cli-adapter.ts reconstructBranchFromHistory` (seeded over raw join), asserted in `reconstruction-side-effects.test.mjs` that the adapter RECEIVED the ack-framed seed. MAJOR 1 — gate 1 native-fork identity monotonicity untested hermetically; fixed with a fork-aware fake `claude` + distinct-child-external-id + "both run independently" tests + structural `--fork-session`/fresh `--session-id` arg test. MAJOR 2 — gate 11 `POST /messages` had no busy guard; fixed via `SessionManager.hasActiveTurn` (turn node in flight, NOT a mere bound session) → 409 pre-`openTurn`, `markNode`/`release` in `runTurnAsync`; proven by `busy-guard.test.mjs` (busy 409/no 2nd node; unrelated branch 202; adopted-idle child first message 202).
+- Non-blocking observations recorded (not blockers): guard→openTurn→markNode TOCTOU window under true concurrency; native-fork/reconstruction real-CLI automated run remains CBW_LIVE opt-in. **Second-pass review (2026-09-18) promoted the TOCTOU observation to a MAJOR and closed it** — synchronous in-process `SessionManager.claimTurn` (request-handler claim with no `await`, separate `pendingClaim` map drained by `resolveSession`, cleared by `release`; `hasActiveTurn` sees pending claims). Two further second-pass MAJORs fixed + re-verified: restart-resume dead code (gate 13 — adapter now gets the domain DB as a duck-typed `RuntimePersistence` hook via `new ClaudeCliAdapter(undefined, undefined, svc)`, and `resolveSession` branch (a) re-registers the bound external session so its first post-restart `sendMessage` never throws `unknown session`; the persisted `runtime_sessions.id` stays the authoritative sessionKey); secret-shaped prefix/substring leak (gate 4 — whole-string boundary-class redaction `/(?:^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}(?:$|[^A-Za-z0-9_-])/` redacts the ENTIRE string; benign words unchanged).
+- Hermetic (re-verified 2026-09-18): control-plane 30 pass + 1 live-skip, domain 32/32, event-protocol 14/14, runtime 9 pass + 2 live-skip; chain build green; Playwright E2E golden path PASS (system Chrome + CBW_FAKE_RUNTIME).
+- Record: `docs/generated/PHASE4_REVIEW.md` (both passes).
+
 Phase 3 Gate — PASS (live, real gateway; committed after independent review FAIL→PASS):
 - Live demo: one branch turn using Glob tool + one Explore subagent, observed end-to-end through `startBranch`/`runTurn` → observer → EventBus + domain DB. Execution tree rooted at completed `main:Main` with completed `subagent:Explore`; persisted event digest all attributed `node=y run=y`; registry stays at 1 (AgentRuns transient, never branches).
 - Reviewer FAIL→PASS: BLOCKERs fixed — (1) secret key inside a Bash command leaked verbatim (allowlist + whole-string-only scrub); now scrubbed anywhere in a string / summary / text; (2) FK crash when the first event was `task_started` (parent main not materialized) — persist hook now lazily creates the parent main. MAJORs fixed — main run now completes at `session.stopped`; assistant text + agent summary routed through `scrub()`. MINOR fixed — `getRuntimeSession` SELECT * → explicit `col AS camel`.
@@ -49,5 +55,6 @@ Phase 3 Gate — PASS (live, real gateway; committed after independent review FA
 
 ## Next Actions
 
-1. Phase 4: UI — conversation tree, current-branch chat, fork-from-turn, branch breadcrumb/rename, agent monitor, event timeline, permission/attention, restart/reconnect UX (backlog P4; deferred batching/flush policy lands here).
-2. Interrupt/reconnect with long-lived process management (deferred, Phase 5/6 with the MCP control surface).
+1. **Phase 4 COMPLETE — Gate PASS** (independent review FAIL→PASS first pass 2026-09-17; **second-pass review 2026-09-18 → 3 MAJORs fixed & re-approved**; record `docs/generated/PHASE4_REVIEW.md`). All S1–S8 done & green (re-verified 2026-09-18): domain 32/32, event-protocol 14/14, runtime 9+2 skip, control-plane 30+1 skip, Playwright E2E golden path PASS.
+2. **Phase 5 (NEXT per backlog P5): Agent Control MCP surface** — create_branch_from_node / send_message / list_branches / get_branch_status / interrupt_branch / archive_branch / query_execution_status / Main-agent integration test.
+3. Interrupt/reconnect with long-lived process management (deferred, Phase 5/6 with the MCP control surface).

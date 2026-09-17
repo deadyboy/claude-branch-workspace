@@ -35,7 +35,12 @@ export interface Branch {
   archivedAt: string | null;
 }
 
-export type ConversationNodeStatus = "pending" | "completed" | "failed";
+// "cancelled" (Phase 4): a pending turn that was interrupted before completion —
+// distinct from "failed" (the turn ran and errored). Interrupt = cancelled,
+// never failed (hard gate 6).
+export type ConversationNodeStatus = "pending" | "completed" | "failed" | "cancelled";
+
+export type TurnStatus = "completed" | "failed" | "cancelled";
 
 export interface ConversationNode {
   id: UUID;
@@ -113,9 +118,25 @@ export interface DomainEvent {
   type: string; // canonical type, e.g. "tool.started"
   status: DomainEventStatus | null;
   sequence: number | null;
+  // Project-scoped monotonic cursor (Phase 4, gate 8): monotonically
+  // increasing across ALL events of the project, assigned by the single
+  // writer in insert order. The durable reconnect cursor.
+  seqRel: number;
   occurredAt: string;
   receivedAt: string;
   payloadJsonRedacted: string;
+}
+
+// Effective-conversation read model (Phase 4, gate 3): the chat as a branch
+// actually sees it — inherited ancestor messages (up to and including the fork
+// point, origin "inherited") plus the branch's own local messages (origin
+// "local"). listMessagesByBranch alone cannot describe a forked branch.
+export interface EffectiveConversationItem {
+  role: "user" | "assistant";
+  content: string;
+  nodeId: UUID;
+  origin: "inherited" | "local";
+  seq: number;
 }
 
 // Execution tree projection: the agent runs that happened during one turn.

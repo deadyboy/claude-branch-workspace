@@ -33,6 +33,7 @@ export type RuntimeEvent =
   | { kind: "tool_result"; toolUseId?: string; isError?: boolean }
   | { kind: "subagent_start"; name?: string; id?: string }
   | { kind: "subagent_stop"; id?: string }
+  | { kind: "attention"; summary?: string }
   | {
       kind: "task";
       id: string;

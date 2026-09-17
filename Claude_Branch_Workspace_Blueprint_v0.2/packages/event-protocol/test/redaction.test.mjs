@@ -80,6 +80,29 @@ test("scrub redacts assignment of a secret-shaped value under an env var", () =>
   assert.equal(scrub("set AWS_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE123456"), "[REDACTED]", "env assignment of a secret-shaped value redacted");
 });
 
+test("LEAK FALSE-POSITIVE REGRESSION: secret-shaped run must redact the WHOLE string even as a prefix/substring (security review MAJOR)", () => {
+  const KEY = "sk-live-ABCDEFG123456789XYZ";
+  const cases = [
+    // URL / query / path-segment — the run is bounded by non-secret chars on both sides
+    `curl https://x/key/${KEY}?q=1`,
+    `${KEY}?q=1`,
+    `key/${KEY}/seg`,
+    // env-var assignment
+    `export FOO=${KEY}ZZZZ`,
+    // embedded in assistant text (any longer value)
+    `my key is ${KEY} end`,
+    // a longer opaque value starting with sk- + 16+ chars
+    `${KEY}ZZZZ`,
+  ];
+  for (const s of cases) {
+    assert.equal(scrub(s), "[REDACTED]", `whole-string redact: ${s.slice(0, 40)}`);
+  }
+  // benign — must NOT be flagged
+  for (const good of ["notification", "mask-12345678901234567", "task-id-1234567890ab", "export NOT_A_KEY=k && true"]) {
+    assert.equal(scrub(good), good, `benign kept: ${good}`);
+  }
+});
+
 test("event bus fans out globally and per-branch, with replay", () => {
   const bus = new EventBus();
   const seen = [];

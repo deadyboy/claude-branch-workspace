@@ -30,11 +30,12 @@ function looksSecretValue(v: unknown): boolean {
   if (s.length < 8) return false;
   // Whole-string markers: an exposed env secret, or a copy-pasted key.
   if (/^ANTHROPIC_\S+/.test(s)) return true;
-  if (/^sk-[A-Za-z0-9_-]{16,}$/.test(s)) return true;
-  // Secret-shaped value anywhere in the string: bash `export FOO=sk-…`, `echo <key>`,
-  // `<key>` inside a longer command or summary. Ensure the pattern needs an
-  // interior terminator or trail so a benign word like "notification" is not a hit.
-  if (/(?:=|\s|["'`(])sk-[A-Za-z0-9_-]{16,}(?:[\s"'`)]|$)/.test(s)) return true;
+  // Secret-shaped run ANYWHERE in the string (whole-string replacement): a
+  // `sk-` + 16+ body chars bounded by non-secret-characters. The boundary class
+  // is [^A-Za-z0-9_-] on both sides so a bare key, a URL (`…/key/sk-…?q=1`), a
+  // path segment (`key/sk-…/seg`) or an `export FOO=sk-…` command all untrust
+  // the ENTIRE string — never leaks as a prefix/substring of a longer value.
+  if (/(?:^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}(?:$|[^A-Za-z0-9_-])/.test(s)) return true;
   // `export NAME=…` / `set NAME=…` where NAME smells like a secret AND the
   // assigned value looks like one (an opaque long value). Variable-name alone
   // (e.g. NOT_A_KEY=…) is not enough — the value side must confirm.
@@ -71,7 +72,7 @@ const TOOL_ALLOW: Allowlist = {
   Read: ["file_path"],
   Glob: ["pattern"],
   Grep: ["pattern"],
-  Bash: ["command"],
+  Bash: ["command", "output"], // output is surface-bearing (docs/04 §6) — scrubbed, not dropped
   Write: ["file_path"],
   Edit: ["file_path"],
 };
@@ -144,6 +145,9 @@ export function buildRedactedPayload(input: NormalizeInput): Record<string, unkn
       break;
     case "task.created":
     case "task.completed":
+      if (input.summary) p["summary"] = scrub(input.summary);
+      break;
+    case "attention.required":
       if (input.summary) p["summary"] = scrub(input.summary);
       break;
     case "session.started":

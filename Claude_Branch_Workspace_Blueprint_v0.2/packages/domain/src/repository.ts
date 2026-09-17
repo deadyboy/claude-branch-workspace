@@ -141,6 +141,20 @@ export class Repository {
         .get(branchId) as ConversationNode | undefined) ?? null
     );
   }
+  /** Idempotent node terminal transition (Phase 4, gate 5). */
+  setNodeStatus(id: string, status: ConversationNode["status"], completedAt: string | null): void {
+    this.db.prepare(`UPDATE conversation_nodes SET status = ?, completed_at = ? WHERE id = ?`).run(status, completedAt, id);
+  }
+  /** Set (or clear) the node's assistant message reference. */
+  setNodeAssistantMessage(id: string, assistantMessageRef: string | null): void {
+    this.db.prepare(`UPDATE conversation_nodes SET assistant_message_ref = ? WHERE id = ?`).run(assistantMessageRef, id);
+  }
+  /** Nodes still pending after a crash → reconciled at boot (Phase 4, gate 15). */
+  listPendingNodes(): ConversationNode[] {
+    return this.db
+      .prepare(`SELECT ${NODE_COLS} FROM conversation_nodes WHERE status = 'pending'`)
+      .all() as ConversationNode[];
+  }
 
   // ---- messages ----
   insertMessage(m: Message): void {
@@ -227,29 +241,56 @@ export class Repository {
   }
 
   // ---- events (canonical, redacted) ----
-  insertEvent(e: DomainEvent): void {
+  /**
+   * Insert a canonical event. `seqRel` is assigned by the single writer here
+   * (project-scoped MAX+1) and returned so the caller's in-memory object stays
+   * truthful. The global cursor premise requires one control-plane process.
+   */
+  insertEvent(e: DomainEvent): number {
+    const seqRel = this.nextEventSeqRel(e.projectId);
     this.db
       .prepare(
         `INSERT INTO events (
            id, project_id, branch_id, node_id, agent_run_id, runtime_session_id,
-           type, status, sequence, occurred_at, received_at, payload_json_redacted
+           type, status, sequence, seq_rel, occurred_at, received_at, payload_json_redacted
          ) VALUES (
            @id, @projectId, @branchId, @nodeId, @agentRunId, @runtimeSessionId,
-           @type, @status, @sequence, @occurredAt, @receivedAt, @payloadJsonRedacted
+           @type, @status, @sequence, @seqRel, @occurredAt, @receivedAt, @payloadJsonRedacted
          )`
       )
-      .run(e);
+      .run({ ...e, seqRel });
+    return seqRel;
+  }
+  nextEventSeqRel(projectId: string): number {
+    const row = this.db
+      .prepare(`SELECT COALESCE(MAX(seq_rel), 0) + 1 AS n FROM events WHERE project_id = ?`)
+      .get(projectId) as { n: number };
+    return row.n;
   }
   listEventsByBranch(branchId: string): DomainEvent[] {
     return this.db
-      .prepare(
-        `SELECT id, project_id AS projectId, branch_id AS branchId, node_id AS nodeId,
-                agent_run_id AS agentRunId, runtime_session_id AS runtimeSessionId,
-                type, status, sequence, occurred_at AS occurredAt, received_at AS receivedAt,
-                payload_json_redacted AS payloadJsonRedacted
-         FROM events WHERE branch_id = ? ORDER BY received_at, sequence`
-      )
+      .prepare(`SELECT ${EVENT_COLS} FROM events WHERE branch_id = ? ORDER BY received_at, sequence`)
       .all(branchId) as DomainEvent[];
+  }
+  listEventsByNode(nodeId: string): DomainEvent[] {
+    return this.db
+      .prepare(`SELECT ${EVENT_COLS} FROM events WHERE node_id = ? ORDER BY received_at, sequence`)
+      .all(nodeId) as DomainEvent[];
+  }
+  /** Durable cursor catch-up/gap-fill (Phase 4, gate 8): events after seq_rel > afterSeqRel. */
+  listEventsSince(projectId: string, afterSeqRel: number, limit: number): DomainEvent[] {
+    return this.db
+      .prepare(
+        `SELECT ${EVENT_COLS} FROM events WHERE project_id = ? AND seq_rel > ?
+         ORDER BY seq_rel ASC LIMIT ?`
+      )
+      .all(projectId, afterSeqRel, limit) as DomainEvent[];
+  }
+  maxEventSeqRel(projectId: string): number {
+    const row = this.db
+      .prepare(`SELECT COALESCE(MAX(seq_rel), 0) AS n FROM events WHERE project_id = ?`)
+      .get(projectId) as { n: number };
+    return row.n;
   }
 
   // ---- agent runs (execution tree) ----
@@ -270,6 +311,12 @@ export class Repository {
     this.db
       .prepare(`UPDATE agent_runs SET status = ?, ended_at = ? WHERE id = ?`)
       .run(status, endedAt, id);
+  }
+  listAgentRunsByStatus(statuses: AgentRun["status"][]): AgentRun[] {
+    const placeholders = statuses.map(() => "?").join(",");
+    return this.db
+      .prepare(`SELECT ${AGENT_RUN_COLS} FROM agent_runs WHERE status IN (${placeholders})`)
+      .all(...statuses) as AgentRun[];
   }
   updateAgentRun(a: AgentRun): void {
     this.db
@@ -359,7 +406,30 @@ export class Repository {
         .get(externalSessionId) as RuntimeSession | undefined) ?? null
     );
   }
+  listRuntimeSessionsByBranch(branchId: string): RuntimeSession[] {
+    return this.db
+      .prepare(`SELECT ${RUNTIME_SESSION_COLS} FROM runtime_sessions WHERE branch_id = ? ORDER BY last_seen_at DESC`)
+      .all(branchId) as RuntimeSession[];
+  }
+  listRuntimeSessionsByStatus(statuses: RuntimeSession["status"][]): RuntimeSession[] {
+    const placeholders = statuses.map(() => "?").join(",");
+    return this.db
+      .prepare(`SELECT ${RUNTIME_SESSION_COLS} FROM runtime_sessions WHERE status IN (${placeholders})`)
+      .all(...statuses) as RuntimeSession[];
+  }
+  updateRuntimeSessionStatus(id: string, status: RuntimeSession["status"], at: string): void {
+    this.db
+      .prepare(`UPDATE runtime_sessions SET status = ?, last_seen_at = ? WHERE id = ?`)
+      .run(status, at, id);
+  }
 }
+
+// Events select list (constitution-mandated col AS camel), used by every event read.
+const EVENT_COLS = `id, project_id AS projectId, branch_id AS branchId, node_id AS nodeId,
+  agent_run_id AS agentRunId, runtime_session_id AS runtimeSessionId,
+  type, status, sequence, seq_rel AS seqRel,
+  occurred_at AS occurredAt, received_at AS receivedAt,
+  payload_json_redacted AS payloadJsonRedacted`;
 
 // snake_case -> camelCase aliased exactly once (constitution-mandated).
 const RUNTIME_SESSION_COLS = `

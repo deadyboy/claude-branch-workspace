@@ -91,6 +91,12 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
   private authToken: string;
   private sessions = new Map<string, ManagedSession>();
   private counter = 0;
+  // Live child processes per sessionKey, so interrupt(sessionId) can kill only
+  // that session's active invocation (gate 6 — interrupt isolation).
+  private inflight = new Map<string, { child: ChildProcess; cancelRequested: boolean }>();
+  // Session keys whose active invocation was interrupted (survives the in-flight
+  // cleanup on close, so the caller can observe cancel semantics).
+  private interruptedKeys = new Set<string>();
 
   constructor(
     private claudeBin = process.env.CBW_CLAUDE_BIN ?? "claude",
@@ -153,6 +159,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
     });
+    this.inflight.set(sessionId, { child: proc, cancelRequested: false });
 
     const events: RuntimeEvent[] = [];
     let buf = "";
@@ -203,6 +210,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
       });
       proc.on("error", (err) => finish(err));
       proc.on("close", () => {
+        this.inflight.delete(sessionId);
         if (buf.trim()) {
           try {
             const ev = this.parseEvent(JSON.parse(buf.trim()));
@@ -288,6 +296,11 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
   async *sendMessage(sessionId: string, input: MessageInput): AsyncIterable<RuntimeEvent> {
     const s = this.sessions.get(sessionId);
     if (!s) throw new Error(`unknown session ${sessionId}`);
+    // A fresh invocation resets the previous interrupt observation.
+    this.interruptedKeys.delete(sessionId);
+    // Stream with interrupt support (gate 6): the child is registered in the
+    // inflight map by sessionKey during runTurn, so interrupt(sessionId) can
+    // kill exactly this invocation. Killing settles the generator.
     const child = await this.runTurn(s.cwd, sessionId, ["--resume", s.externalSessionId], new Map(), input.text);
     for (const ev of child.events) yield ev;
   }
@@ -315,12 +328,17 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     snapshot: { visibleMessages: { role: "user" | "assistant"; content: string }[]; projectInstructions?: string | null },
     input: ForkInput
   ): Promise<RuntimeSession> {
+    // Gate 2: when the control plane supplies a seedText (the transcript wrapped
+    // in the TRANSCRIPT_ACK frame), feed THAT verbatim as the fresh session's
+    // opening prompt — never an instruction to re-run. Without a seedText we
+    // fall back to the raw transcript join (interface contract).
+    const seed = input.seedText ?? snapshot.visibleMessages.map((m) => m.content).join("\n\n");
     const child = await this.runTurn(
       input.cwd ?? process.cwd(),
       input.newSessionId,
       ["--session-id", input.newSessionId],
       new Map(),
-      snapshot.visibleMessages.map((m) => m.content).join("\n\n")
+      seed
     );
     const ext = child.initId;
     const s: ManagedSession = { externalSessionId: ext, cwd: input.cwd ?? process.cwd(), running: false };
@@ -329,12 +347,39 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     return { externalSessionId: ext, cwd: input.cwd ?? process.cwd(), running: false, runtimeVersion: child.version, sessionKey: input.newSessionId };
   }
 
+  /**
+   * Interrupt the active invocation for exactly ONE session (gate 6). Marks the
+   * invocation cancelled, kills its child (SIGTERM, then SIGKILL if it lingers),
+   * and records the key so the caller can observe cancel semantics even after
+   * the child closes and the in-flight entry is cleaned up. No other session's
+   * child is touched.
+   */
   async interrupt(sessionId: string): Promise<void> {
     const s = this.sessions.get(sessionId);
     if (!s) return;
-    // Interrupt is handled by the caller via ChildProcess kill; sessions are
-    // short-lived print-mode processes already completed. No-op to honor the
-    // interface; see Phase 3 for long-lived process management.
+    const entry = this.inflight.get(sessionId);
+    if (!entry) return; // no active invocation for this session
+    entry.cancelRequested = true;
+    this.interruptedKeys.add(sessionId);
+    const { child } = entry;
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // already gone
+    }
+    // Grace window (Windows SIGTERM ≈ hard kill); escalate to SIGKILL if alive.
+    if (child.exitCode === null && !child.killed) {
+      setTimeout(() => {
+        if (child.exitCode === null && !child.killed) {
+          try { child.kill("SIGKILL"); } catch { /* already gone */ }
+        }
+      }, 2000);
+    }
+  }
+
+  /** True if the session's last invocation was interrupted (gate 6 cancel semantics). */
+  wasInterrupted(sessionId: string): boolean {
+    return this.interruptedKeys.has(sessionId);
   }
 
   async terminate(sessionId: string): Promise<void> {

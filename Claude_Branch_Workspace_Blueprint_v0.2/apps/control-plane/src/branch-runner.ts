@@ -84,7 +84,7 @@ export async function runTurn(
     nodeId,
     runtimeSessionId,
     bus,
-    persist: (ev) => {
+    persist: (ev): number | void => {
       // An event's payload may name a parent run (parentAgentRunId). If the
       // parent is a main run the runtime never emitted as a standalone event,
       // materialize it on demand so the FK resolves (review BLOCKER #2).
@@ -138,7 +138,7 @@ export async function runTurn(
         });
         materialized.add(ev.agentRunId);
       }
-      svc.recordEvent({
+      const recorded = svc.recordEvent({
         projectId: ev.projectId,
         branchId: ev.branchId,
         nodeId: ev.nodeId,
@@ -150,6 +150,7 @@ export async function runTurn(
         receivedAt: ev.receivedAt,
         payloadJsonRedacted: JSON.stringify(ev.payload),
       });
+      const seqRel = recorded.seqRel;
       // terminal agent events close the run
       if (ev.type === "agent.completed" || ev.type === "agent.failed") {
         if (ev.agentRunId) {
@@ -163,6 +164,7 @@ export async function runTurn(
           svc.completeAgentRun(main.id, ev.status === "completed" ? "completed" : "failed", ev.occurredAt);
         }
       }
+      return seqRel;
     },
   });
 

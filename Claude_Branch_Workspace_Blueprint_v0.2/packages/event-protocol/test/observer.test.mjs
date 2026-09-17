@@ -93,6 +93,22 @@ test("thinking_tokens and task_updated are not emitted (no event, no payload)", 
   assert.equal(types.filter((t) => t.startsWith("task")).length, 0);
 });
 
+test("g7: attention raw kind maps to a redacted attention.required canonical event", () => {
+  const bus = new EventBus();
+  const seen = [];
+  bus.subscribe((ev) => seen.push(ev));
+  const o = makeObserver({ bus });
+  o.feed({ kind: "init", externalSessionId: "e" });
+  o.feed({ kind: "attention", summary: "Please confirm the plan" });
+  o.feed({ kind: "result", exitCode: 0 });
+
+  const attn = seen.find((e) => e.type === "attention.required");
+  assert.ok(attn, "attention.required emitted");
+  assert.equal(attn.branchId, "b1");
+  assert.equal(attn.nodeId, "n1");
+  assert.equal(attn.payload.summary, "Please confirm the plan");
+});
+
 test("persist hook stores every canonical event with a redacted payload", () => {
   const bus = new EventBus();
   const stored = [];

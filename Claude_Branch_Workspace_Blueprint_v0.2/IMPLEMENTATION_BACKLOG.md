@@ -78,18 +78,37 @@ Phase-3 review fixes (independent review FAIL→PASS, record `docs/generated/PHA
 - [x] Main run completes at `session.stopped` (was perpetually `running`)
 - [x] `getRuntimeSession` explicit `col AS camel` select (no SELECT *)
 
-## P4 — UI
+## P4 — UI (Phase 4 COMPLETE, Gate PASS — first pass 2026-09-17; second-pass review 2026-09-18 → 3 MAJORs fixed & re-approved)
 
-- [ ] Conversation Tree
-- [ ] current branch chat
-- [ ] fork-from-turn action
-- [ ] branch breadcrumb
-- [ ] branch rename
-- [ ] duplicate-name UI
-- [ ] Agent monitor
-- [ ] event timeline
-- [ ] permission/attention state
-- [ ] restart/reconnect UX
+Phase-4 gates (S1–S3 done; S4 control-plane core + tests done; S5 server done; S6 web done; S7 E2E PASS; S8 docs done; independent review FAIL→PASS → gate; second-pass review re-approved):
+- [x] Turn lifecycle explicit (openTurn→complete/fail/cancel; `appendCompletedTurn` thin wrapper) — S1
+- [x] Effective-conversation read model (`getEffectiveConversation`) — S1
+- [x] Durable project event cursor (`events.seq_rel` + `listEventsSince`) — S1
+- [x] Restart reconcile (pending nodes + orphan sessions + orphan agent_runs, B3) — S1/S4
+- [x] Bash output surface + observer userMessage/cancel — S2
+- [x] SATISFIED: gate 7 attention.required canonical event (summary) — S2
+- [x] Real per-session interrupt (gate 6) — S3
+- [x] SessionManager (sole runtime-session writer, gate 13; 409 Busy; no double-seed B2) — S4
+- [x] runTurnOnce → TurnResult (chat truth, gate 4) — S4
+- [x] ForkOrchestrator eager freeze (gate 1/2) — S4
+- [x] S4 tests: frozen-fork / recon no-side-effect / turn-result-truth / interrupt isolation / attention / concurrency / restart+B3 / attribution-honesty (+ migrated 3 branch-runner tests) — S4
+- [x] Fastify server: routes + WS gap-fill + loopback/origin security + SPA static — S5
+  - routes: projects / branches (root+fork, messages 202, interrupt, archive, rename, ancestry) / conversation / nodes / events (branch+project cursor) / agent-runs / runtime (capabilities/sessions/reconcile) / attention (list/respond) / WS
+  - gates: 12 (loopback + origin), 11 (per-branch busy), 13 (session-manager sole writer), 15 (reconcile route)
+- [x] apps/web three-pane UI (Vite+React+zustand): ConversationTree / ChatPane / AgentMonitor / Timeline / attention cards / socket reconnect — S6
+- [x] Playwright E2E golden path PASS (`apps/web/e2e/ph4-flow.spec.ts`, channel:"chrome", CBW_FAKE_RUNTIME=1): boot→multi-turn→fork→no-leak→attention — S7 (g1/g7/g8/g10/g14 asserted)
+- [x] Docs: `docs/10` rewritten to real S5 wire contract; `docs/03 §8` gate-2 + TRANSCRIPT_ACK; `docs/04 §8` gate-9 attribution; `docs/05` P4 data-model + UI constraints; `docs/02 §4` signature drift fixed; `PHASE4_REVIEW_MAP.md` created — S8
+- [x] **Independent Phase-4 review FAIL→PASS → gate** — reviewer APPROVE 15/15, gate PASS (record `docs/generated/PHASE4_REVIEW.md`; fixes: seedText de-DeadCode for TRANSCRIPT_ACK, hermetic fork-native identity tests, POST /messages busy 409 via `hasActiveTurn`)
+- [x] Conversation Tree
+- [x] current branch chat
+- [x] fork-from-turn action
+- [x] branch breadcrumb (ancestry)
+- [x] branch rename
+- [x] duplicate-name UI (id-suffix disambiguation)
+- [x] Agent monitor
+- [x] event timeline
+- [x] permission/attention state (g7, fake-seeded)
+- [x] restart/reconnect UX (socket status dot + REST catch-up + WS gap-fill)
 
 ## P5 — Agent Control MCP
 

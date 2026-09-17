@@ -11,6 +11,7 @@ Thumbs.db
 # local runtime/database artifacts (implementation may refine)
 data/
 tmp/
+.tmp/
 .worktrees/
 
 # runtime experiment artifacts (never commit transient probe state)
@@ -18,3 +19,7 @@ tmp/
 
 # per-branch adapter settings (runtime writes these to <cwd>/.cbw/)
 .cbw*
+
+# Playwright run artifacts (regenerated every e2e run)
+test-results/
+playwright-report/

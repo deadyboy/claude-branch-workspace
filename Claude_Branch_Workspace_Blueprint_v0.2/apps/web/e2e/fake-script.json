@@ -1,0 +1,13 @@
+{
+  "turns": [
+    {
+      "text": "approve the change",
+      "events": [
+        { "kind": "init", "externalSessionId": "e2e-attn" },
+        { "kind": "assistant", "text": "This change needs your approval." },
+        { "kind": "attention", "summary": "Approve running npm test on this branch" },
+        { "kind": "result", "exitCode": 0, "stopReason": "end_turn" }
+      ]
+    }
+  ]
+}

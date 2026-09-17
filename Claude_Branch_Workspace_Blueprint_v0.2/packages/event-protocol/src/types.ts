@@ -46,6 +46,9 @@ export interface CanonicalEvent {
   occurredAt: string; // ISO
   receivedAt: string; // ISO
   payload: Record<string, unknown>;
+  /** Project-scoped monotonic cursor (Phase 4 gate 8); set by the persist hook
+   *  before publish when available. */
+  seqRel?: number;
 }
 
 /** Agent/worker lifecycle within one turn (execution tree, docs/04 §2). */

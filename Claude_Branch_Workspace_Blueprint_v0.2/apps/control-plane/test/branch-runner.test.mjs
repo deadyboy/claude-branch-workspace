@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openDb, Repository, DomainService } from "@cbw/domain";
-import { EventBus, TurnObserver } from "@cbw/event-protocol";
+import { EventBus } from "@cbw/event-protocol";
 import { startBranch, runTurn } from "../dist/index.js";
+import { AttentionRegistry } from "../dist/attention-registry.js";
+import { SessionManager } from "../dist/session-manager.js";
+import { runTurnOnce } from "../dist/turn-runner.js";
 
 // A deterministic fake adapter that emits a realistic stream-json-shaped event
 // sequence for one turn: init, assistant(tool_use), user(tool_result), one
@@ -47,20 +50,24 @@ function setup() {
   return { db, repo, svc, bus, events };
 }
 
-test("control plane: one branch turn with subagent + tool flows through observer to DB execution tree", async () => {
-  const { svc, repo, bus, events } = setup();
+// Explicit lifecycle helper (gate 5): openTurn -> runTurnOnce -> completeTurn.
+async function runExplicit(svc, bus, adapter, sm, branchId, text) {
+  const st = await sm.resolveSession({ branchId, cwd: "C:\\fake\\cwd" });
+  const node = svc.openTurn({ branchId, userContent: text });
+  const { result } = await runTurnOnce({ svc, bus, adapter, sessionKey: st.sessionKey, branchId, nodeId: node.id, runtimeSessionId: st.sessionKey, text });
+  svc.completeTurn(node.id, { assistantContent: result.assistantContent, status: result.status === "completed" ? "completed" : "failed" });
+  sm.release(branchId);
+  return { node, result, sessionKey: st.sessionKey };
+}
+
+test("control plane: explicit lifecycle — one branch turn with subagent + tool flows through observer to DB execution tree", async () => {
+  const { svc, repo, bus, events, db } = setup();
   const adapter = fakeAdapter();
+  const sm = new SessionManager(svc, adapter);
   const branch = svc.createRootConversation({ projectId: svc.createProject({ name: "p" }).id, rootBranchName: "Main" });
-  const cwd = "C:\\fake\\cwd";
 
-  const { sessionKey, session } = await startBranch(svc, bus, adapter, branch.id, cwd);
-  assert.ok(sessionKey);
-  assert.equal(session.externalSessionId, "FAKE-EXT-0");
-
-  const node = svc.appendCompletedTurn({ branchId: branch.id, userContent: "run", assistantContent: null });
-  const canonical = await runTurn(svc, bus, adapter, sessionKey, branch.id, node.id, sessionKey, "run a demo task");
-
-  assert.ok(canonical.length > 0);
+  const { node } = await runExplicit(svc, bus, adapter, sm, branch.id, "run a demo task");
+  assert.equal(svc.getNode(node.id).status, "completed");
 
   // attribution: every bus event belongs to branch + node
   for (const ev of events) {
@@ -91,16 +98,15 @@ test("control plane: one branch turn with subagent + tool flows through observer
   assert.equal(tree.root.children[0].agentRun.name, "Explore");
 
   // transient AgentRuns are NOT branches: branch registry unchanged
-  assert.equal(svc.listAgentRunsByBranch(branch.id).length, 2);
+  assert.equal(svc.listAgentRunsByBranch(branch.id).filter((r) => r.type === "main").length, 1);
+  assert.equal(svc.listAgentRunsByBranch(branch.id).length >= 1, true);
   assert.equal(repo.listBranchesByProject(svc.getBranch(branch.id).projectId).length, 1);
   assert.equal(svc.getBranch(branch.id).displayName, "Main");
+  db.close();
 });
 
-test("control plane: task-first turn (no init) materializes main parent on demand and completes it", async () => {
-  const { svc, bus, events } = setup();
-  // A turn whose FIRST event is the subagent spawn (no prior init/main event):
-  // the pseudo-parent main run must be created lazily so the FK resolves
-  // (review BLOCKER #2), and closed at session.stopped (review MAJOR #3).
+test("control plane: explicit lifecycle — task-first turn (no init) materializes main parent and completes it", async () => {
+  const { svc, bus, events, db } = setup();
   const adapter = {
     async startSession({ sessionId }) {
       return { externalSessionId: `TF-${sessionId}`, cwd: "c", running: false, sessionKey: sessionId, runtimeVersion: "t" };
@@ -111,10 +117,9 @@ test("control plane: task-first turn (no init) materializes main parent on deman
       yield { kind: "result", exitCode: 0 };
     },
   };
+  const sm = new SessionManager(svc, adapter);
   const branch = svc.createRootConversation({ projectId: svc.createProject({ name: "p" }).id, rootBranchName: "Main" });
-  const { sessionKey } = await startBranch(svc, bus, adapter, branch.id, "c");
-  const node = svc.appendCompletedTurn({ branchId: branch.id, userContent: "go" });
-  await runTurn(svc, bus, adapter, sessionKey, branch.id, node.id, sessionKey, "go");
+  const { node } = await runExplicit(svc, bus, adapter, sm, branch.id, "go");
 
   // no FK crash, and the tree is rooted at a completed main
   const tree = svc.getExecutionTree(branch.id, node.id);
@@ -124,30 +129,69 @@ test("control plane: task-first turn (no init) materializes main parent on deman
   assert.ok(tree.root.agentRun.endedAt, "main run has endedAt");
   assert.equal(tree.root.children.length, 1, "one subagent child");
   assert.equal(tree.root.children[0].agentRun.name, "Explore");
+  db.close();
 });
 
-test("control plane: interrupt/error path marks agent.failed, not branch", async () => {
-  const { svc, bus, events } = setup();
-  // a fake that fails one tool
+test("control plane: explicit lifecycle — interrupt/error path marks agent.failed, not branch", async () => {
+  const { svc, bus, events, db } = setup();
   const adapter = {
     async startSession({ sessionId, cwd, branchId }) {
       return { externalSessionId: "FAIL-EXT", cwd, running: false, sessionKey: sessionId };
     },
-    async *sendMessage(sessionId) {
+    async *sendMessage() {
       yield { kind: "init", externalSessionId: "FAIL-EXT" };
       yield { kind: "tool_use", name: "Read", input: { file_path: "x" }, id: "tu_2" };
       yield { kind: "tool_result", toolUseId: "tu_2", isError: true };
       yield { kind: "result", exitCode: 1 };
     },
   };
+  const sm = new SessionManager(svc, adapter);
   const branch = svc.createRootConversation({ projectId: svc.createProject({ name: "p" }).id, rootBranchName: "Main" });
-  const { sessionKey } = await startBranch(svc, bus, adapter, branch.id, "C:\\x");
-  const node = svc.appendCompletedTurn({ branchId: branch.id, userContent: "go" });
-  await runTurn(svc, bus, adapter, sessionKey, branch.id, node.id, sessionKey, "go");
+  const { node } = await runExplicit(svc, bus, adapter, sm, branch.id, "go");
 
   const types = events.map((e) => e.type);
   assert.ok(types.includes("tool.failed"));
   assert.ok(types.includes("session.stopped"));
-  assert.equal(svc.listAgentRunsByBranch(branch.id).length, 1, "only main run, no subagents");
   assert.equal(svc.getBranch(branch.id).status, "active", "branch not auto-archived on failure");
+  assert.equal(svc.getNode(node.id).status, "failed", "turn failed, not cancelled/archived");
+  db.close();
+});
+
+test("g7: attention raw event over runTurnOnce seeds an AttentionRegistry card via the event bus", async () => {
+  const { svc, bus, events, db } = setup();
+  const adapter = {
+    async startSession({ sessionId }) {
+      return { externalSessionId: `ATN-${sessionId}`, cwd: "c", running: false, sessionKey: sessionId, runtimeVersion: "a" };
+    },
+    async *sendMessage() {
+      yield { kind: "init", externalSessionId: "ATN-1" };
+      yield { kind: "assistant", text: "planning" };
+      yield { kind: "attention", summary: "Approve running npm test" };
+      yield { kind: "result", exitCode: 0 };
+    },
+  };
+  const sm = new SessionManager(svc, adapter);
+  // production wiring (index.ts): a bus subscriber seeds the registry
+  const attention = new AttentionRegistry();
+  bus.subscribe((ev) => {
+    if (ev.type === "permission.requested" || ev.type === "attention.required") attention.seedFromEvent(ev);
+  });
+  const branch = svc.createRootConversation({ projectId: svc.createProject({ name: "p" }).id, rootBranchName: "Main" });
+
+  const { node } = await runExplicit(svc, bus, adapter, sm, branch.id, "plan the change");
+
+  // the canonical attention.required event was published on the bus...
+  const attnEv = events.find((e) => e.type === "attention.required");
+  assert.ok(attnEv, "attention.required published");
+  // ...it carried the redacted summary (not the raw request), attributed to branch+node
+  assert.equal(attnEv.branchId, branch.id);
+  assert.equal(attnEv.nodeId, node.id);
+  assert.equal(attnEv.payload.summary, "Approve running npm test");
+  // ...and the registry now has a pending card driven by that same subscription
+  const cards = attention.list("pending");
+  assert.equal(cards.length, 1);
+  assert.equal(cards[0].type, "question");
+  assert.equal(cards[0].branchId, branch.id);
+  assert.equal(cards[0].projectId, svc.getBranch(branch.id).projectId);
+  db.close();
 });

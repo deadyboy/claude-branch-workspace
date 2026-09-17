@@ -31,6 +31,7 @@ export type RuntimeEventLike =
   | { kind: "tool_result"; toolUseId?: string; isError?: boolean }
   | { kind: "subagent_start"; name?: string; id?: string }
   | { kind: "subagent_stop"; id?: string }
+  | { kind: "attention"; summary?: string }
   | {
       kind: "task";
       id: string;
@@ -53,8 +54,10 @@ export interface TurnObserverHooks {
   nodeId: string | null;
   runtimeSessionId: string | null;
   bus: EventBus;
-  /** Persist one redacted canonical event to the control-plane store. */
-  persist?: (ev: CanonicalEvent) => void;
+  /** Persist one redacted canonical event to the control-plane store; returns
+   *  the authoritative project-scoped seqRel (gate 8) so it can ride on the
+   *  published event for WS live-forwarding. */
+  persist?: (ev: CanonicalEvent) => number | void;
   now?: () => string;
 }
 
@@ -105,24 +108,7 @@ export class TurnObserver {
     if (this.endedAt) return [];
     const out: ObservedEvent[] = [];
     const emit = (type: CanonicalType, extra: Partial<ObservedEvent> = {}) => {
-      const ev: ObservedEvent = {
-        eventId: randomUUID(),
-        projectId: this.hooks.projectId,
-        branchId: this.hooks.branchId,
-        nodeId: this.hooks.nodeId,
-        agentRunId: this.currentAgent()?.agentRunId ?? null,
-        runtimeSessionId: this.hooks.runtimeSessionId,
-        type,
-        status: undefined,
-        sequence: this.seqCounter++,
-        occurredAt: this.now(),
-        receivedAt: this.now(),
-        payload: {},
-        ...extra,
-      };
-      this.emitted++;
-      this.hooks.bus.publish(ev);
-      this.hooks.persist?.(ev);
+      const ev = this.emit(type, extra);
       out.push(ev);
       return ev;
     };
@@ -132,7 +118,9 @@ export class TurnObserver {
         emit("session.started");
         break;
       case "assistant":
-        emit("message.assistant.completed", { payload: { text: e.text } });
+        emit("message.assistant.completed", {
+          payload: buildRedactedPayload({ eventId: "", type: "message.assistant.completed", occurredAt: "", receivedAt: "", projectId: "", branchId: "", nodeId: null, agentRunId: null, runtimeSessionId: null, sequence: null, text: e.text }),
+        });
         break;
       case "tool_use":
         emit("tool.started", {
@@ -154,6 +142,15 @@ export class TurnObserver {
       case "subagent_stop":
         this.closeSubagent(emit);
         break;
+      case "attention":
+        emit("attention.required", {
+          payload: buildRedactedPayload({
+            eventId: "", type: "attention.required", occurredAt: "", receivedAt: "",
+            projectId: "", branchId: "", nodeId: null, agentRunId: null, runtimeSessionId: null,
+            sequence: null, summary: e.summary ?? null,
+          }),
+        });
+        break;
       case "result":
         emit("session.stopped", { status: e.exitCode === 0 ? "completed" : "failed" });
         this.endedAt = this.now();
@@ -166,6 +163,47 @@ export class TurnObserver {
 
   currentAgent(): OpenAgent | null {
     return this.runs.length ? this.runs[this.runs.length - 1] : null;
+  }
+
+  /** Emit the user's own message as a canonical event (observability, gate 4). */
+  userMessage(text: string): ObservedEvent | null {
+    if (this.endedAt) return null;
+    return this.emit("message.user", {
+      payload: buildRedactedPayload({ eventId: "", type: "message.user", occurredAt: "", receivedAt: "", projectId: "", branchId: "", nodeId: null, agentRunId: null, runtimeSessionId: null, sequence: null, text }),
+    });
+  }
+
+  /** Interrupt (gate 6): mark the turn cancelled on the canonical surface. */
+  cancel(): ObservedEvent | null {
+    if (this.endedAt) return null;
+    const ev = this.emit("session.stopped", { status: "cancelled" });
+    this.endedAt = this.now();
+    return ev;
+  }
+
+  private emit(type: CanonicalType, extra: Partial<ObservedEvent> = {}): ObservedEvent {
+    const ev: ObservedEvent = {
+      eventId: randomUUID(),
+      projectId: this.hooks.projectId,
+      branchId: this.hooks.branchId,
+      nodeId: this.hooks.nodeId,
+      agentRunId: this.currentAgent()?.agentRunId ?? null,
+      runtimeSessionId: this.hooks.runtimeSessionId,
+      type,
+      status: undefined,
+      sequence: this.seqCounter++,
+      occurredAt: this.now(),
+      receivedAt: this.now(),
+      payload: {},
+      ...extra,
+    };
+    this.emitted++;
+    // Persist FIRST (returns the project-scoped seqRel, gate 8) so the published
+    // event carries the authoritative cursor for WS live-forwarding.
+    const seqRel = this.hooks.persist?.(ev);
+    if (typeof seqRel === "number") ev.seqRel = seqRel;
+    this.hooks.bus.publish(ev);
+    return ev;
   }
 
   agentRuns(): { agentRunId: string; kind: AgentKind; status: string }[] {

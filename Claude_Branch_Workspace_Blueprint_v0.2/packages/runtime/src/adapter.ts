@@ -17,6 +17,14 @@ export type {
 export interface ForkInput {
   newSessionId: string;
   cwd?: string;
+  /**
+   * Seed text for a reconstruction fork (ADR-006). When present the adapter must
+   * feed THIS as the session's first prompt (instead of re-deriving it from the
+   * snapshot), so the control plane can wrap the transcript in the
+   * transcript-acknowledgement frame (gate 2: side-effect-free reconstruction —
+   * old content is read-only prior context, never a command to re-run).
+   */
+  seedText?: string;
 }
 
 /**

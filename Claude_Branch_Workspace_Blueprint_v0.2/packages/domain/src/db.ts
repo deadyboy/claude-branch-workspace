@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 
 export type Db = Database.Database;
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 // Versioned migrations, applied in order. Each entry upgrades the DB from
 // version N-1 to N. Idempotent within a transaction per version.
@@ -159,6 +159,25 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
         CREATE INDEX IF NOT EXISTS idx_agent_runs_parent ON agent_runs(parent_agent_run_id);
         CREATE INDEX IF NOT EXISTS idx_agent_runs_type ON agent_runs(type);
         CREATE INDEX IF NOT EXISTS idx_events_agentrun ON events(agent_run_id);
+      `);
+    },
+  },
+  {
+    // Phase 4: durable event cursor. Adds a project-scoped monotonic seq_rel
+    // to every event so the WS/REST layer can do crucially simple
+    // events-after-cursor catch-up and gap-fill (hard gate 8). Backfilled in
+    // creation order so pre-existing rows get stable, ordered cursors.
+    version: 3,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE events ADD COLUMN seq_rel INTEGER NOT NULL DEFAULT 0;
+        UPDATE events SET seq_rel = (
+          SELECT n FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY received_at, id) AS n
+            FROM events
+          ) ranked WHERE ranked.id = events.id
+        );
+        CREATE INDEX IF NOT EXISTS idx_events_project_seq ON events(project_id, seq_rel);
       `);
     },
   },
