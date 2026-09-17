@@ -19,15 +19,16 @@ Phase 0 outputs: `docs/generated/ENVIRONMENT_REPORT.md`, `docs/generated/RUNTIME
 
 ## P1 — Domain + Persistence
 
-- [ ] Project model
-- [ ] Branch model
-- [ ] Conversation node model
-- [ ] Runtime session mapping
-- [ ] SQLite schema/migrations
-- [ ] Tree invariants
-- [ ] Duplicate branch-name tests
-- [ ] Branch-of-branch tests
-- [ ] Restart recovery tests
+- [x] Project model
+- [x] Branch model
+- [x] Conversation node model
+- [x] Runtime session mapping (table + types; wired in later phases)
+- [x] SQLite schema/migrations (versioned, idempotent — verified reopen)
+- [x] Tree invariants (fork from archived branch rejected; cross-project fork rejected; fork-head non-mutation)
+- [x] Duplicate branch-name tests
+- [x] Branch-of-branch tests
+- [x] Restart recovery tests (close+reopen, full digest identical)
+- [x] Debug CLI (`packages/domain/src/cli.ts`: projects/branches/nodes/tree/ancestry/snapshot)
 
 ### Phase-0-recommended P1 tests (from independent review)
 - [ ] Scenario A: automated fork-fidelity regression (child must not know fork-point+1..M) — seed: `scripts/fork-fidelity-probe.mjs`
@@ -101,5 +102,5 @@ Phase 0 outputs: `docs/generated/ENVIRONMENT_REPORT.md`, `docs/generated/RUNTIME
 
 ## Deferred / open items from Phase 0 review
 - [ ] Resolve bypassPermissions tension: constitution forbids default dangerous bypass; runtime is print-mode with default bypassPermissions. Decide & document default permission profile (auto/acceptEdits) and note permission/attention is interactive-only in v0 (MEDIUM, Phase 3 attention).
-- [ ] Auto-memory: choose CLI/settings-level mechanism to isolate memory per branch (currently isolated cwd works; document).
+- [ ] Auto-memory: formalize per-branch isolation mechanism in Phase 2 runtime adapter (isolated cwd + `--settings` autoMemoryMemoryDir verified in Phase 0; wire into session start).
 - [ ] Gateway port discovery: control plane must discover live gateway (15722) rather than trust settings (15721). (Blocked only on desktop app internals; implement discovery + drift detection.)

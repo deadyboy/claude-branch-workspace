@@ -1,0 +1,14 @@
+{
+  "name": "claude-branch-workspace",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Claude Code Visual Control Plane - Branchable AI Workspace",
+  "type": "module",
+  "scripts": {
+    "test": "pnpm -r --if-present test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.22.0"
+}

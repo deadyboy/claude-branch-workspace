@@ -1,0 +1,111 @@
+// Domain types (docs/09_DATA_MODEL.md). Names are labels, IDs are identity.
+
+export type UUID = string;
+
+export interface Project {
+  id: UUID;
+  name: string;
+  rootPath: string | null;
+  createdAt: string; // ISO
+  updatedAt: string;
+}
+
+export type OriginStrategy =
+  | "native_head_fork"
+  | "native_historical_fork"
+  | "replay_reconstruction"
+  | "imported";
+
+export type WorkspaceMode = "shared" | "worktree";
+
+export interface Branch {
+  id: UUID;
+  projectId: UUID;
+  parentBranchId: UUID | null;
+  forkFromNodeId: UUID | null;
+  displayName: string | null;
+  originStrategy: OriginStrategy;
+  workspaceMode: WorkspaceMode;
+  runtimeAdapter: string; // e.g. "claude-cli"
+  runtimeSessionId: string | null;
+  runtimeProfileId: string | null;
+  workspacePath: string | null;
+  status: "active" | "archived";
+  createdAt: string;
+  archivedAt: string | null;
+}
+
+export type ConversationNodeStatus = "pending" | "completed" | "failed";
+
+export interface ConversationNode {
+  id: UUID;
+  projectId: UUID;
+  branchId: UUID;
+  parentNodeId: UUID | null;
+  localTurnIndex: number; // unique within branch
+  userMessageRef: string; // reference to messages table
+  assistantMessageRef: string | null;
+  runtimeUserMessageId: string | null;
+  runtimeAssistantMessageId: string | null;
+  status: ConversationNodeStatus;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface Message {
+  id: UUID;
+  nodeId: UUID | null;
+  branchId: UUID;
+  role: "user" | "assistant" | "system";
+  visibleContent: string;
+  runtimeMessageId: string | null;
+  // Intentionally strictly increasing per branch: creation order across turns,
+  // since all rows of a turn share one createdAt timestamp.
+  seq: number;
+  createdAt: string;
+}
+
+export interface RuntimeSession {
+  id: UUID;
+  branchId: UUID;
+  adapterType: string;
+  externalSessionId: string | null;
+  runtimeVersion: string | null;
+  status: "starting" | "running" | "stopped" | "failed" | "interrupted";
+  lastSeenAt: string;
+  metadataJson: string;
+}
+
+export type AgentRunStatus =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "needs_attention"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface AgentRun {
+  id: UUID;
+  ownerBranchId: UUID;
+  ownerNodeId: UUID | null;
+  parentAgentRunId: UUID | null;
+  runtimeAgentId: string | null;
+  type: string;
+  taskSummary: string | null;
+  status: AgentRunStatus;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+// Branch context snapshot used for reconstruction fork (ADR-006 Option 3).
+export interface BranchContextSnapshot {
+  branchId: UUID;
+  forkFromNodeId: UUID;
+  ancestorNodeIds: UUID[];
+  // visible conversation turns up to (and including) the fork point, oldest first
+  visibleMessages: { role: "user" | "assistant"; content: string }[];
+  projectInstructions: string | null;
+  workspaceBinding: { mode: WorkspaceMode; path: string | null } | null;
+  createdAt: string;
+}

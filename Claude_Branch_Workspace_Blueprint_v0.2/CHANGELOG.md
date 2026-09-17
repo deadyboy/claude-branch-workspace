@@ -15,6 +15,16 @@
 - Explicitly separated Conversation Tree and Execution Tree.
 - Explicitly treated arbitrary historical-node fork as a Phase 0 capability spike.
 
+## Phase 1 — Domain & Persistence (2026-09-17)
+
+- Built `packages/domain` (@cbw/domain): versioned SQLite migrations (v1), Repository (aliased camelCase reads), DomainService, debug CLI (`src/cli.ts`).
+- Implemented required commands: createRootConversation, appendCompletedTurn, createBranchFromNode, renameBranch, archiveBranch, getBranchAncestry, getConversationTree.
+- Persisted reconstruction contract per ADR-006: `branch_context_snapshots` (ancestorNodeIds + visibleMessages), seeded on fork.
+- Enforced invariants: fork points require completed nodes; cross-project parent rejected; archived branches reject append/fork; fork-head non-mutation; duplicate display names allowed; `messages.seq` monotonic per branch.
+- 13/13 tests green (nested branch, duplicate labels, ancestry, restart recovery, cross-project parent, fork-point validity, atomicity, completedAt semantics).
+- Independent review FAIL→PASS: fixed non-atomic append (BLOCKER), pending/failed fork + fabricated projectInstructions (MAJOR), restart-digest coverage + message ordering (MINOR); record in `docs/generated/PHASE1_REVIEW.md`.
+- Phase 1 Gate PASS.
+
 ## Phase 0 — Capability Spike & Architecture Gate (2026-09-17)
 
 - Verified Claude CLI v2.1.226 on Win11/Git Bash; documented auth model (desktop gateway 127.0.0.1:15722 + settings env token).

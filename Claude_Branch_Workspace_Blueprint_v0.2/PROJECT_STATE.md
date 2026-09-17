@@ -4,11 +4,11 @@
 
 ## Current Phase
 
-Phase 0 — COMPLETE (gate passed after independent review + fixes)
+Phase 1 — COMPLETE (gate PASS after independent review + fixes)
 
 ## Current Objective
 
-完成 Claude Runtime 能力验证与架构定稿。下一步：Phase 1 (Domain + Persistence)。
+Phase 1 done. Next: Phase 2 (real Claude Runtime Adapter). Implement `src/runtime/` with spawn semantics from Phase 0 probes (async child_process.spawn, closed stdin, stream-json + --verbose), auto-memory isolation per branch, gateway port discovery + drift detection.
 
 ## Verified Facts (all locally verified 2026-09-17, Claude Code v2.1.226, Win11/Git Bash)
 
@@ -31,13 +31,14 @@ Phase 0 — COMPLETE (gate passed after independent review + fixes)
 - ADR-001..005 accepted (Control Plane / two-tree / identifiers-not-names / workspace modes / local-first adapters)
 - ADR-006 accepted: forkFromHead=native, forkFromNode=reconstruction (no fake ancestry; origin_strategy=replay_reconstruction)
 - ADR-007 accepted: TS/Node + Fastify + SQLite(better-sqlite3) + pnpm + React/Vite; child_process.spawn print-mode primary; WSL secondary.
+- Phase 1 implementation notes: `@cbw/domain` package with versioned SQLite migrations; `messages.seq` monotonic per branch for deterministic ordering; fork points require completed node status; snapshots seed reconstruction from visibleMessages only (no fabricated instructions).
 
 ## Last Completed Gate
 
-Phase 0 Gate — PASS (all checklist items met; reviewer blockers resolved)
+Phase 1 Gate — PASS (13/13 tests green; reviewer blockers resolved; `docs/generated/PHASE1_REVIEW.md`)
 
 ## Next Actions
 
-1. Begin Phase 1 (domain models + SQLite + tree invariants), with Phase-0-recommended tests.
-2. Implement gateway port discovery + context snapshot builder for reconstruction fork.
-3. Run all `scripts/*-probe.mjs` before marking Phase 1 done.
+1. Begin Phase 2 (real Claude Runtime Adapter) per ADR-007 + Phase 0 runtime facts.
+2. Implement gateway port discovery + drift detection (open item).
+3. Formalize per-branch auto-memory isolation mechanism (open item).
