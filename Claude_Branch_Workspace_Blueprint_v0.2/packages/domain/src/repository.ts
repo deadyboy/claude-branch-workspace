@@ -244,4 +244,66 @@ export class Repository {
       )
       .run(s);
   }
+
+  /** Upsert the mapping for one runtime session and its owning branch. */
+  upsertRuntimeSession(s: RuntimeSession): void {
+    const upsert = this.db.prepare(
+      `INSERT INTO runtime_sessions (
+         id, branch_id, adapter_type, external_session_id, runtime_version, status, last_seen_at, metadata_json
+       ) VALUES (
+         @id, @branchId, @adapterType, @externalSessionId, @runtimeVersion, @status, @lastSeenAt, @metadataJson
+       )
+       ON CONFLICT(id) DO UPDATE SET
+         branch_id = excluded.branch_id,
+         adapter_type = excluded.adapter_type,
+         external_session_id = excluded.external_session_id,
+         runtime_version = excluded.runtime_version,
+         status = excluded.status,
+         last_seen_at = excluded.last_seen_at,
+         metadata_json = excluded.metadata_json`
+    );
+    const upd = this.db.prepare(
+      `UPDATE branches SET runtime_session_id = ? WHERE id = ?`
+    );
+    this.transaction(() => {
+      upsert.run(s);
+      if (s.branchId) upd.run(s.id, s.branchId);
+    });
+  }
+
+  getRuntimeSession(id: string): RuntimeSession | null {
+    return (
+      (this.db
+        .prepare(`SELECT * FROM runtime_sessions WHERE id = ?`)
+        .get(id) as unknown as RuntimeSession | undefined) ?? null
+    );
+  }
+
+  getRuntimeSessionByExternalId(externalSessionId: string): RuntimeSession | null {
+    const row = this.db
+      .prepare(`SELECT * FROM runtime_sessions WHERE external_session_id = ? LIMIT 1`)
+      .get(externalSessionId) as
+      | {
+          id: string;
+          branch_id: string;
+          adapter_type: string;
+          external_session_id: string | null;
+          runtime_version: string | null;
+          status: string;
+          last_seen_at: string;
+          metadata_json: string;
+        }
+      | undefined;
+    if (!row) return null;
+    return {
+      id: row.id,
+      branchId: row.branch_id,
+      adapterType: row.adapter_type,
+      externalSessionId: row.external_session_id,
+      runtimeVersion: row.runtime_version,
+      status: row.status as RuntimeSession["status"],
+      lastSeenAt: row.last_seen_at,
+      metadataJson: row.metadata_json,
+    };
+  }
 }

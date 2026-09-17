@@ -4,18 +4,21 @@
 
 ## Current Phase
 
-Phase 1 — COMPLETE (gate PASS after independent review + fixes)
+Phase 2 — GATES PASS (RuntimeAdapter + Claude CLI adapter; head-fork/restart fidelity PASS live; historical-fork reconstruction no-leak PASS live). Pending: independent review + docs + commit.
 
 ## Current Objective
 
-Phase 1 done. Next: Phase 2 (real Claude Runtime Adapter). Implement `src/runtime/` with spawn semantics from Phase 0 probes (async child_process.spawn, closed stdin, stream-json + --verbose), auto-memory isolation per branch, gateway port discovery + drift detection.
+Phase 2: real Claude Runtime Adapter, verified live against the desktop gateway (`packages/runtime`). Both required demos pass live. Next: dispatch independent reviewer, update CHANGELOG/backlog, commit Phase 2, then Phase 3 (events + execution tree).
 
 ## Verified Facts (all locally verified 2026-09-17, Claude Code v2.1.226, Win11/Git Bash)
 
 - Child `claude -p` processes authenticate via desktop gateway `ANTHROPIC_BASE_URL=http://127.0.0.1:15722` + `ANTHROPIC_AUTH_TOKEN` from `~/.claude/settings.json` env. (settings' own 15721 is dead; the ACTIVE per-process gateway is 15722.)
 - Node async `child_process.spawn` with closed stdin drives real sessions; `spawnSync` hangs. SIGTERM interrupts in ~110ms.
-- Session lifecycle: self-chosen `--session-id`; `--resume <id>` continues in a NEW process across restarts.
-- Fork-from-head: native `--resume <id> --fork-session --session-id <new>` copies full prefix; original preserved; branch-of-branch works (grandchild inherits chain, earlier branches unaffected).
+- Session lifecycle: self-chosen `--session-id <uuid>` (VALIDATION: must be a true UUID, 12-hex last group; malformed → `Error: Invalid session ID. Must be a valid UUID.`, exit 1); `--resume <id>` continues in a NEW process across restarts.
+- `--session-id <valid-uuid>` pins the CLI's external session id to the control-plane UUID: the `system:init` session_id equals the passed UUID (live-probed). So `externalSessionId === control-plane uuid` is now REAL, not a convention.
+- `--session-id` over an ALREADY-MATERIALIZED UUID is rejected: `Error: Session ID <uuid> is already in use.` (live-probed 2026-09-17). So a control-plane `startSession` must generate a FRESH UUID per new branch/runtime session; restart recovery resumes `--resume <existing-ext>` (never re-`startSession`). Live tests use `randomUUID()` per run for exactly this reason.
+- IMPORTANT live semantics: a no-prompt `--resume`/`--fork-session` emits no init (CLI asks for a prompt); `--resume` does NOT change the underlying external id — the init reports the ORIGINAL resumed id, so identity is stable. `resumeSession(externalId,cwd)` is registration-only; the actual round-trip happens on first sendMessage.
+- Fork-from-head: native `--resume <id> --fork-session --session-id <new-uuid>` copies full prefix; original preserved; branch-of-branch works (grandchild inherits chain, earlier branches unaffected).
 - Fork-from-arbitrary-turn has **no native CLI** → strategy = reconstruction (ADR-006). Automated no-leak proof PASSES with per-branch isolated cwd + auto-memory disabled: child knows turn≤N only, root unmutated, no cross-branch future memory.
 - Event surface: `--print --verbose --include-hook-events --output-format=stream-json` → `system:init`(session_id) + PreToolUse/PostToolUse + SubagentStart/Stop + task_* + assistant tool_use + user tool_result + background_tasks_changed + thinking_tokens(ephemeral, excluded). Hook wrappers carry empty payloads; real tool detail comes from tool_use/tool_result records.
 - Worktree: `--worktree` creates real isolated git worktree; shared = plain cwd.
@@ -35,10 +38,13 @@ Phase 1 done. Next: Phase 2 (real Claude Runtime Adapter). Implement `src/runtim
 
 ## Last Completed Gate
 
-Phase 1 Gate — PASS (13/13 tests green; reviewer blockers resolved; `docs/generated/PHASE1_REVIEW.md`)
+Phase 2 Gate — PASS (live, real gateway):
+- Restart fidelity: Main real session → 4 turns → fork-from-head → child → Main turn 5 → child independent → grandchild → fresh adapter (simulated restart) resumes all 3 on same external id → Main/Child continue with context (SURVIVED_MAIN / SURVIVED_CHILD) → duplicate-name non-interference. 219s.
+- Historical fork (Scenario A): seed child via reconstruction (ADR-006) from turns 1–2 only → child remembers turn 2 (TWO), has NO turn-3 secret (THREE) → no post-fork context leak. 283s.
+- Hermetic: 13/13 domain + 2/2 runtime unit green; live tests skip without `CBW_LIVE=1`.
 
 ## Next Actions
 
-1. Begin Phase 2 (real Claude Runtime Adapter) per ADR-007 + Phase 0 runtime facts.
-2. Implement gateway port discovery + drift detection (open item).
-3. Formalize per-branch auto-memory isolation mechanism (open item).
+1. Independent Phase 2 review (per constitution §6) — dispatch reviewer, resolve findings.
+2. Update CHANGELOG.md + IMPLEMENTATION_BACKLOG.md (mark ClaudeCliAdapter/session/fork/faithful historical-fork DONE) + commit Phase 2.
+3. Phase 3: events + execution tree (hook receiver, event normalization/persistence, transient AgentRun, execution-tree attribution).

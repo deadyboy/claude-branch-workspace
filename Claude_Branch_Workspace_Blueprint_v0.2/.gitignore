@@ -15,3 +15,6 @@ tmp/
 
 # runtime experiment artifacts (never commit transient probe state)
 .runtime-experiments/
+
+# per-branch adapter settings (runtime writes these to <cwd>/.cbw/)
+.cbw*

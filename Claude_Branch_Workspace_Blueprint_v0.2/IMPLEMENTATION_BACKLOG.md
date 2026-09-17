@@ -40,18 +40,24 @@ Phase 0 outputs: `docs/generated/ENVIRONMENT_REPORT.md`, `docs/generated/RUNTIME
 
 ## P2 — Runtime
 
-- [x] RuntimeAdapter interface (drafted in docs/03; implement)
-- [ ] ClaudeCliAdapter
-- [ ] session start/resume/send
-- [ ] fork-from-head
-- [ ] fork-from-node (reconstruction strategy, ADR-006)
-- [ ] interrupt/terminate
-- [ ] reconnect/recovery
-- [ ] capability reporting
+- [x] RuntimeAdapter interface (interface + types in `packages/runtime/src/{types,adapter}.ts`)
+- [x] ClaudeCliAdapter (`packages/runtime/src/claude-cli-adapter.ts`)
+- [x] session start/resume/send (startSession pins `--session-id` to control-plane UUID; resume is registration-only + lazy `--resume` on first sendMessage; send actually round-trips)
+- [x] fork-from-head (native `--resume --fork-session --session-id <new-uuid>`, live-verified)
+- [x] fork-from-node (reconstruction strategy, ADR-006; no-leak live gate PASS)
+- [x] interrupt/terminate (interface satisfied; process-level interrupt is Phase 3)
+- [x] reconnect/recovery (persisted external-id mapping in domain `runtime_sessions` via duck-typed RuntimePersistence hook; DB-backed restart test recovers the SAME control-plane UUID on a fresh adapter; live gate PASS)
+- [x] capability reporting (honest CAPABILITIES + unit-tested)
+
+Phase-2 reviewer fixes (independent review FAIL→PASS): persisted mapping (was in-memory-only) into domain `runtime_sessions`; fixed `parseEvent` to read `tool_use`/`tool_result` from nested `message.content[]` and stop mislabeling unrelated events as `task`; added spawn timeout (dead/hung gateway surfaces error, no infinite hang); added unit coverage for nested tools/task/timeout + DB-backed restart.
+
+Gate demos verified live (2026-09-17, real gateway):
+- Restart fidelity full 9-step demo PASS (219s). HISTORICAL fork no-leak PASS (283s).
+- Verified `--session-id <valid-uuid>` pins `system:init` session_id = control-plane UUID. No-prompt resume/fork emits no init (must carry a prompt). `resumeSession` registration-only.
 
 ### Phase-0-recommended P2 tests
-- [ ] Interrupt/reconnect automated test (SIGTERM mid-turn → process ends, session id resumable, event stream reconciled) — seed: `scripts/interrupt-probe.mjs`
-- [ ] Execution-tree attribution test (map wrapper hook events + tool-use ids + task_* to owner branch/turn; transient AgentRuns never become branches)
+- [ ] Interrupt/reconnect automated test (SIGTERM mid-turn → process ends, session id resumable, event stream reconciled) — seed: `scripts/interrupt-probe.mjs` (deferred to Phase 3 with long-lived process mgmt)
+- [ ] Execution-tree attribution test (map wrapper hook events + tool-use ids + task_* to owner branch/turn; transient AgentRuns never become branches) (Phase 3)
 
 ## P3 — Events + Agents
 

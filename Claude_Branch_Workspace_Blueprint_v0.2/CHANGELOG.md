@@ -15,6 +15,19 @@
 - Explicitly separated Conversation Tree and Execution Tree.
 - Explicitly treated arbitrary historical-node fork as a Phase 0 capability spike.
 
+## Phase 2 — Runtime Integration (2026-09-17)
+
+- Built `packages/runtime` (@cbw/runtime): `RuntimeAdapter` interface + `ClaudeCliAdapter` (async `child_process.spawn`, shell:false, closed stdin, print-mode `--verbose --output-format stream-json`).
+- Identity pinning: `--session-id <uuid>` makes the CLI external id equal the control-plane UUID (live-verified: `system:init` session_id === passed UUID). Malformed UUID rejected by CLI (`Invalid session ID`).
+- Live semantics nailed down: no-prompt resume/fork emits no init (must carry a prompt); `--resume` reports the ORIGINAL external id (identity stable); `resumeSession` is registration-only, `--resume` round-trips lazily on first sendMessage.
+- Native fork-from-head via `--resume --fork-session --session-id <new>`; historical fork via reconstruction (ADR-006) seeded ONLY from pre-fork visible messages (no fabricated instructions).
+- Per-branch `.cbw/` settings: auto-memory isolated/disabled, defaultMode acceptEdits. Gateway env: 15721→15722 drift correction + `CBW_BASE_URL`/`CBW_AUTH_TOKEN` override.
+- Honest CAPABILITIES: persistentSessions/resume/forkFromHead/nativeSubagents/eventStream true; rewindConversation/lifecycleHooks/interactivePermissions false (unit-tested).
+- Tests: hermetic fake-claude units (2) + TWO live gates (opt-in `CBW_LIVE=1`): restart fidelity 9-step demo (219s PASS) and historical-fork no-leak (283s PASS). thinking_tokens excluded from all surface/persistence.
+- Full hermetic suite: 13/13 domain + 5/5 runtime green (unit + persistence + timeout); live tests skip without `CBW_LIVE=1`.
+- Independent review FAIL→fixes: persisted the external-id mapping into domain `runtime_sessions` via a duck-typed RuntimePersistence hook (no second SQLite file — domain is the single fact source); `resumeSession` reads back the original control-plane UUID on restart (DB-backed restart test PASS); rewrote `parseEvent` so `tool_use`/`tool_result` come from nested `message.content[]` (real stream-json shape), `system:task_*` carries status, and unrelated events are dropped instead of mislabeled as tasks; added a spawn timeout so a dead/hung gateway surfaces an error instead of an infinite hang.
+- Phase 2 Gate PASS (live: restart fidelity 9-step + historical reconstruction no-leak). Record in `docs/generated/PHASE2_REVIEW.md`.
+
 ## Phase 1 — Domain & Persistence (2026-09-17)
 
 - Built `packages/domain` (@cbw/domain): versioned SQLite migrations (v1), Repository (aliased camelCase reads), DomainService, debug CLI (`src/cli.ts`).
