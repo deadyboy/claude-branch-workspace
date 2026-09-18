@@ -2,10 +2,11 @@
 
 ## Current integration — 2026-09-18
 
-Branch: `codex/phase5-6-integration`, workspace `F:\claudetreespace-integration`.
-Phase 5 MCP is complete, functional/code-review gate PASS. Phase 6 isolation,
-scheduler and UI implementation are present; scale gate is PARTIAL (real 10-way
-passes, real 20-way has native CLI crashes). Phase 4 below is retained history.
+Merged into main `master` via fast-forward (2026-09-18): `b93f225` → `d68055b`
+→ `9767e8d`. Phase 5 MCP is complete, functional/code-review gate PASS. Phase 6
+isolation, scheduler and UI implementation are present; scale gate is PARTIAL
+(real 10-way passes, real 20-way has native CLI crashes; default pool stays 5;
+20/40 not supported as operating claims). Phase 4 below is retained history.
 Current results and remaining limits: `PHASE5_6_HANDOFF.md`.
 
 Verified: real outer Claude agent → stdio MCP → production HTTP → real child

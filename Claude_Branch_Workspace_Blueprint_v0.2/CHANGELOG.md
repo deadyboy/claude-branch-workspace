@@ -1,5 +1,14 @@
 # Changelog
 
+## Consolidation — 2026-09-18
+
+- Rescued uncommitted Codex Phase 5/6 work into `codex/phase5-6-integration` as `9767e8d`,
+  then fast-forwarded main `master` to it (`b93f225` → `d68055b` → `9767e8d`).
+- Re-verified in main: build green (all 6 workspace projects), full default suite
+  **127 tests, 0 fail, 4 opt-in live skips**, mcp-server 8/8, control-plane 57+1 skip.
+- Phase 6 status recorded as **PARTIAL** (real 5-way/10-way PASS, 20-way native CLI
+  crash `3221226505`; default pool stays 5; 20/40 not supported operating claims).
+
 ## Phase 5/6 integration — 2026-09-18
 
 - Added official stdio MCP control surface and real Main-to-child dispatch acceptance.
@@ -8,7 +17,6 @@
 - Added historical/worktree fork UI, workspace status, filters and no-event pending recovery.
 - Native Windows build and 127 default tests passed (3 separate opt-in live tests).
 - Independent code review PASS; live capacity boundary and evidence: `PHASE5_6_HANDOFF.md`.
-- No commit, merge, port-back or push performed.
 
 ## Phase 4 — Usable UI (COMPLETE, Gate PASS 2026-09-17 — independent review FAIL→PASS, reviewer APPROVE 15/15)
 
