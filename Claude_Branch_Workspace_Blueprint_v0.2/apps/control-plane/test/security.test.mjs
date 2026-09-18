@@ -58,25 +58,10 @@ test("g12: WS rejects a disallowed origin (403-close) before any event flows", a
 
   // Disallowed origin → close code 1008 (policy) with the forbidden message.
   // injectWS passes an onOpen hook where the close happens.
-  let closed = null;
-  try {
-    const ws = await app.injectWS(`/ws/projects/${p.id}/events`, {
-      headers: { origin: "http://evil.example.com" },
-    }, {
-      onOpen: (s) => {
-        s.on("close", (code, reason) => {
-          closed = { code, reason: reason?.toString() ?? "" };
-        });
-        s.on("error", () => {});
-      },
-    });
-    // If the server rejects the upgrade it never opens; if it opens then closes.
-    if (ws) await ws.close?.();
-  } catch { /* upgrade refused */ }
-
-  // The outcome must be "forbidden" — either never upgraded (caught) or a
-  // 1008 close observed. We treat "not upgraded" as pass too (no data sent).
-  assert.ok(closed === null || closed.code === 1008, `bad origin yields no data: ${JSON.stringify(closed)}`);
+  const denied = await app.inject({ method: "GET", url: `/ws/projects/${p.id}/events`,
+    headers: { host: "localhost", origin: "http://evil.example.com", connection: "upgrade", upgrade: "websocket" } });
+  assert.equal(denied.statusCode, 403, "foreign origin rejected before websocket upgrade");
+  assert.equal(denied.json().error, "forbidden origin");
   await app.close();
   close();
 });
@@ -95,7 +80,7 @@ test("g12: same-origin WS is allowed and forwards an event delta", async () => {
 
   // Publish a bus event; the ws bridge forwards it (no origin header → same-origin allowed).
   const received = [];
-  const ws = await app.injectWS(`/ws/projects/${p.id}/events`, {}, {
+  const ws = await app.injectWS(`/ws/projects/${p.id}/events`, { headers: { host: "localhost" } }, {
     onOpen: (s) => s.on("message", (raw) => received.push(String(raw))),
   });
 

@@ -4,6 +4,7 @@
 // node's turn; tool events display at branch/turn level only. agent.message is
 // shown only with explicit sender/receiver runtime ids, never fabricated prose.
 
+import { useState } from "react";
 import { useStore } from "../store/useStore";
 import type { AgentRun, Branch } from "../types";
 
@@ -14,6 +15,7 @@ export function AgentMonitor() {
   const runs = branchId ? (st.agentRunsByBranch[branchId] ?? []) : [];
   const timeline = st.timeline;
   const activeBranchTimeline = branchId ? timeline.filter((t) => t.branchId === branchId) : [];
+  const [activeOnly, setActiveOnly] = useState(false);
 
   if (!branchId || !branch) {
     return (
@@ -26,8 +28,9 @@ export function AgentMonitor() {
 
   // Group runs by owning node; an unattached run (ownerNodeId null) shows under
   // "turn / top".
+  const visibleRuns = activeOnly ? runs.filter((run) => ["queued", "running", "waiting", "needs_attention"].includes(run.status)) : runs;
   const groups = new Map<string | null, AgentRun[]>();
-  for (const r of runs) {
+  for (const r of visibleRuns) {
     const key = r.ownerNodeId;
     const arr = groups.get(key) ?? [];
     arr.push(r);
@@ -36,9 +39,14 @@ export function AgentMonitor() {
 
   return (
     <aside className="pane monitor">
-      <div className="pane-hd"><span>Agent Monitor</span></div>
+      <div className="pane-hd">
+        <span>Agent Monitor</span>
+        <button className={activeOnly ? "active" : ""} onClick={() => setActiveOnly((value) => !value)}>
+          {activeOnly ? "All runs" : "Active runs only"}
+        </button>
+      </div>
       <div className="monitor-body">
-        {runs.length === 0 && activeBranchTimeline.length === 0 && (
+        {visibleRuns.length === 0 && activeBranchTimeline.length === 0 && (
           <div className="empty">No agent runs for this branch yet.</div>
         )}
         {Array.from(groups.entries()).map(([nodeId, arr]) => {

@@ -1,5 +1,31 @@
 # PROJECT STATE
 
+## Current integration — 2026-09-18
+
+Branch: `codex/phase5-6-integration`, workspace `F:\claudetreespace-integration`.
+Phase 5 MCP is complete, functional/code-review gate PASS. Phase 6 isolation,
+scheduler and UI implementation are present; scale gate is PARTIAL (real 10-way
+passes, real 20-way has native CLI crashes). Phase 4 below is retained history.
+Current results and remaining limits: `PHASE5_6_HANDOFF.md`.
+
+Verified: real outer Claude agent → stdio MCP → production HTTP → real child
+Claude session → persisted answer; historical reconstruction, Git worktree,
+two independent turns, restart continuity, interruption and archive preservation.
+Full build, 127 default tests (3 opt-in live tests skipped), and both Playwright E2E tests passed.
+Independent review's startup/fork/shutdown defects were fixed and re-reviewed PASS.
+The final clean-repository runtime smoke passed. Keep default concurrency 5;
+do not enable 20/40 on the strength of synthetic tests.
+The real outer-agent MCP test passed again against the final runtime fixture.
+
+Runtime settings now use inline JSON and do not dirty the user's repository.
+The per-session endpoint overrides a stale global settings.env value without
+changing global configuration, authentication or the selected model.
+
+The current worktree is the implementation source. No port-back, commit, merge
+or push has been performed; the original checkout and its changes are preserved.
+
+## Historical Phase 4 record
+
 > Claude Code 必须持续更新此文件。它是跨 session/compaction 的简洁事实源。
 
 ## Current Phase

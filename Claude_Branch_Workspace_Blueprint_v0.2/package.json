@@ -5,7 +5,12 @@
   "description": "Claude Code Visual Control Plane - Branchable AI Workspace",
   "type": "module",
   "scripts": {
-    "test": "pnpm -r --if-present test"
+    "build": "pnpm -r --if-present build",
+    "start": "node apps/control-plane/dist/index.js",
+    "test": "pnpm -r --if-present test",
+    "test:e2e": "pnpm --filter @cbw/web e2e",
+    "test:live": "node scripts/phase5-live.mjs",
+    "mcp": "node apps/mcp-server/dist/index.js"
   },
   "engines": {
     "node": ">=20"

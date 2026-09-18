@@ -1,5 +1,10 @@
 # Phase 5 编配 (Orchestration) — Agent Control MCP
 
+> 2026-09-18 更新：本文是实施前计划。当前实施位于 `codex/phase5-6-integration`
+> 独立 worktree；工作区策略已由用户确定，不需要重复询问。最新结果与后续事项见
+> `PHASE5_6_HANDOFF.md` 和 `PROJECT_STATE.md`。本文中的旧测试计数、待派工状态与
+> port-back 提议不代表当前已执行动作。
+
 > 本文件是**自包含**的继续工作入口:新开一个"监控会话"(orchestrator),让它先读本文件,再按 §3 的章节派工单逐章派工。
 > 原 Phase 4 lead 会话上下文已满并已提交 Phase 4(`67eb6b7` + `b93f225`,分支 `claude/jovial-hertz-7d3310`);本文整理好下一步,供
 > 监控会话取代原 lead 继续推进。**不依赖原会话的上下文**,一切必要信息都在这里或所引用的文件里。

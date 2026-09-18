@@ -3,15 +3,14 @@
 // The control plane (fake runtime) serves the built SPA at 127.0.0.1:15723;
 // every REST call and the WS stream are same-origin (gate 12). Coverage:
 //   - g10  golden path: boot → auto-project + root Main → multi-turn chat
-//   - g14  Shared-only UI (no worktree selector; mode tag 'S')
+//   - g14  Shared/Worktree UI (mode tag 'S' or 'W', explicit selector)
 //   - g1   committed-tree integrity: forked child shows inherited + local,
 //         and the parent's later turns NEVER leak into the child
 //   - g7   attention loop: card seeded from an attention event, allow/deny
 //   - g8   live timeline fills + monotonic seqRel
 //
-// The UI currently exposes only "Fork from latest turn" (historical-node fork
-// semantics are covered by the g1 server tests via the API), so this spec
-// drives the UI's Fork control. Run: pnpm --filter @cbw/web e2e
+// The UI exposes a historical completed-turn chooser as well as the branch
+// row shortcut. Run: pnpm --filter @cbw/web e2e
 
 import { test, expect, type Page } from "@playwright/test";
 
@@ -52,9 +51,12 @@ test("ph4 golden path: boot, multi-turn, fork, no-leak, attention", async ({ pag
   await waitSocketOpen(page);
   const mainRow = page.locator(".tree-row").filter({ hasText: "Main" });
   await expect(mainRow).toBeVisible();
-  // g14 — Shared-only: mode tag is 'S', and the header advertises Shared only
+  // g14 — the default branch uses Shared mode and the header advertises both
+  // supported workspace modes.
   await expect(page.locator(".mode-tag").first()).toHaveText("S");
-  await expect(page.locator(".pane-hd", { }).filter({ hasText: "Shared only" }).first()).toBeVisible();
+  await expect(page.locator(".pane-hd").filter({ hasText: "Shared / Worktree" }).first()).toBeVisible();
+  await expect(page.getByLabel("Active branches only")).toBeChecked();
+  await expect(page.getByLabel("Search branches")).toBeVisible();
 
   // ---- multi-turn on Main (g10) ----
   await sendAndWait(page, "explain the design");
@@ -75,11 +77,32 @@ test("ph4 golden path: boot, multi-turn, fork, no-leak, attention", async ({ pag
   await expect(page.locator(".run-card").first()).toBeVisible({ timeout: 15_000 });
   await expect(page.locator(".run-card").first()).toContainText("completed");
 
+  // Phase 6 — fork from the first completed historical turn through Chat.
+  await page.getByRole("button", { name: "Fork from history", exact: true }).click();
+  const historyDialog = page.locator(".chat .fork-dialog");
+  await expect(historyDialog).toBeVisible();
+  await expect(historyDialog.getByLabel("Fork source turn").locator("option")).toHaveCount(2);
+  await expect(historyDialog.getByLabel("Workspace mode")).toHaveValue("shared");
+  await historyDialog.getByLabel("Fork source turn").selectOption({ index: 0 });
+  await historyDialog.locator("input").fill("Historic");
+  await historyDialog.getByRole("button", { name: "Fork", exact: true }).click();
+  await expect(page.locator(".tree-row").filter({ hasText: "Historic" })).toBeVisible({ timeout: 15_000 });
+
+  // The branch search narrows the bounded tree list to one matching row.
+  const branchSearch = page.getByLabel("Search branches");
+  await branchSearch.fill("Historic");
+  await expect(page.locator(".tree-row").filter({ hasText: "Historic" })).toHaveCount(1);
+  await branchSearch.fill("");
+
   // ---- fork Main from latest turn -> Child (g1) ----
   const mainRow2 = page.locator(".tree-row").filter({ hasText: "Main" }).first();
   await mainRow2.getByRole("button", { name: "Fork", exact: true }).click();
   const dialog = mainRow2.locator(".fork-dialog");
   await expect(dialog).toBeVisible();
+  await expect(dialog.getByLabel("Workspace mode")).toHaveValue("shared");
+  await dialog.getByLabel("Workspace mode").selectOption("worktree");
+  await expect(dialog).toContainText("clean HEAD");
+  await dialog.getByLabel("Workspace mode").selectOption("shared");
   await dialog.locator("input").fill("Child");
   await dialog.getByRole("button", { name: "Fork", exact: true }).click();
   await expect(page.locator(".tree-row").filter({ hasText: "Child" })).toBeVisible({ timeout: 15_000 });

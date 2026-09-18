@@ -1,6 +1,52 @@
 # Claude Branch Workspace — Blueprint v0.2
 
-这是一个可直接交给 Claude Code 开始实现的项目蓝图。
+本地 Claude 会话分支工作空间，包含控制面、Web UI 与 stdio MCP。
+实现与验收进度见 `PROJECT_STATE.md`；原始蓝图保留在 `docs/` 与 `tasks/`。
+
+## 启动（原生 Windows PowerShell）
+
+需要 Node.js（本次使用 24.15.0）、pnpm 11.22.0、Git、已配置认证的 Claude Code。
+在本目录执行：
+
+```powershell
+pnpm install --frozen-lockfile
+pnpm build
+pnpm start
+```
+
+打开 `http://127.0.0.1:15723`。默认数据库为当前目录的 `data/cbw.db`。
+`CBW_DB`、`CBW_PORT` 可指定独立数据库/端口；`CBW_BASE_URL` 指定网关。
+会话设置会明确覆盖 CLI 全局设置中的旧网关地址，但不会修改全局配置或落盘凭据。
+不设置模型覆盖时保留 Claude Code 已选模型。
+
+`CBW_MAX_CONCURRENT`、`CBW_PER_PROJECT` 默认都是 5；共享目录允许并发，
+存在同文件写入冲突风险。需要独立写入时选择 worktree；创建源必须有提交且工作区干净。
+Worktree 来自当前 Git HEAD，不是历史对话时刻的文件快照。归档保留文件。
+
+## 主控接入
+
+先启动控制面，再将 `node <本目录绝对路径>/apps/mcp-server/dist/index.js` 注册为
+主控客户端的 stdio MCP。设置 `CBW_CONTROL_PLANE_URL` 可连接自定义控制面端口。
+完整工具契约与配置例子见 `docs/12_MCP_CONTROL_PLANE.md`。
+
+主控读取分支/节点 ID，创建持久分支，发送任务后获得 `nodeId`，用
+`get_turn_result` 获取终态和有界回答。用户在 Web UI 中看到并接管同一分支。
+此接口管理本项目的 Claude 会话，不会自动控制 Codex 桌面所有任务。
+
+## 验证
+
+```powershell
+pnpm test
+pnpm test:e2e
+pnpm test:live
+node scripts/phase5-agent-live.mjs
+node scripts/phase6-capacity-live.mjs
+```
+
+默认测试使用模拟运行时。`test:live` 会启动真实 Claude 调用并保留独立测试数据库，
+需要网关可用。模拟并发容量与真实模型吞吐分别记录，不把模拟 40 会话宣称为真实 40 会话。
+`phase5-agent-live` 复用最近一次成功的 live fixture；容量探针默认依次实测 5/10/20，
+首个失败等级后停止。最终验证结果见 `PHASE5_6_HANDOFF.md`。
 
 ## 产品一句话定义
 
@@ -16,7 +62,7 @@
 - UI 可以看到 Agent 的任务、状态、工具调用、消息和结果，但不展示模型隐藏思维链；
 - 后续支持几十个并发执行槽，而不把工作流写死成固定的 Extractor/Reviewer 流水线。
 
-## 解压后怎么开始
+## 原始蓝图启动说明（历史保留，现有实现使用上方启动命令）
 
 1. 进入本目录。
 2. 启动 Claude Code：
@@ -59,7 +105,8 @@ Claude 的强制阅读顺序写在 `START_HERE.md`。
 
 ## 当前状态
 
-这是设计与执行蓝图，不包含已经完成的产品实现。
+已经包含产品实现；当前开发分支为 `codex/phase5-6-integration`。
+准确通过情况与未决项以 `PROJECT_STATE.md` 及 `docs/generated/` 的验收记录为准。
 
 Claude Code 开始执行后必须持续更新：
 

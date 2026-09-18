@@ -8,8 +8,8 @@
 import { openDb, Repository, DomainService } from "@cbw/domain";
 import { EventBus } from "@cbw/event-protocol";
 import { ClaudeCliAdapter } from "@cbw/runtime";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { resolve, dirname } from "node:path";
 import { SessionManager } from "./session-manager.js";
 import { ForkOrchestrator } from "./fork-orchestrator.js";
 import { AttentionRegistry } from "./attention-registry.js";
@@ -17,6 +17,9 @@ import { reconcileOnBoot } from "./reconcile.js";
 import { buildApp, defaultStaticDir } from "./server.js";
 import { FakeRuntime, type FakeScript } from "./fake-runtime.js";
 import type { AppContext } from "./context.js";
+import { WorkspaceManager } from "./workspace-manager.js";
+import { TurnScheduler } from "./turn-scheduler.js";
+import { claimDatabase } from "./database-owner.js";
 
 const HOST = "127.0.0.1"; // hard gate 12: loopback only
 const PORT = Number(process.env.CBW_PORT ?? 15723);
@@ -36,6 +39,8 @@ function loadFakeAdapter(): FakeRuntime {
 
 export async function main(): Promise<void> {
   const dbPath = resolve(process.env.CBW_DB ?? "./data/cbw.db");
+  mkdirSync(dirname(dbPath), { recursive: true });
+  const ownership = await claimDatabase(dbPath);
   const db = openDb(dbPath);
   const repo = new Repository(db);
   const svc = new DomainService(repo);
@@ -48,7 +53,9 @@ export async function main(): Promise<void> {
   // restart (gate 13 restart-resume) instead of dropping to an orphan turn.
   const adapter = fake ? loadFakeAdapter() : new ClaudeCliAdapter(undefined, undefined, svc);
   const sessionManager = new SessionManager(svc, adapter);
-  const forkOrchestrator = new ForkOrchestrator(svc, sessionManager, adapter);
+  const workspaceManager = new WorkspaceManager(svc);
+  const scheduler = new TurnScheduler(Number(process.env.CBW_MAX_CONCURRENT ?? 5), Number(process.env.CBW_PER_PROJECT ?? 5));
+  const forkOrchestrator = new ForkOrchestrator(svc, sessionManager, adapter, workspaceManager, scheduler);
   const attention = new AttentionRegistry();
 
   // Interrupt isolation (gate 6): the turn runner + interrupt route already
@@ -70,7 +77,7 @@ export async function main(): Promise<void> {
   // attention.required events become pending cards for the UI to answer.
   attention.subscribeToBus(bus);
 
-  const ctx: AppContext = { db, svc, repo, bus, sessionManager, forkOrchestrator, attention, adapter, fakeAdapter: fake ? adapter : undefined };
+  const ctx: AppContext = { db, svc, repo, bus, sessionManager, forkOrchestrator, attention, adapter, workspaceManager, scheduler, fakeAdapter: fake ? adapter : undefined };
 
   const app = await buildApp({
     ctx,
@@ -92,9 +99,15 @@ export async function main(): Promise<void> {
   const shutdown = async (sig: string): Promise<void> => {
     // eslint-disable-next-line no-console
     console.log(`[cbw] ${sig} — shutting down`);
-    try { await app.close(); } catch { /* best-effort */ }
-    try { db.close(); } catch { /* best-effort */ }
-    process.exit(0);
+    try {
+      await app.close();
+      db.close();
+      ownership.close();
+      process.exit(0);
+    } catch {
+      console.error("[cbw] shutdown did not drain active work");
+      process.exitCode = 1;
+    }
   };
   process.once("SIGINT", () => void shutdown("SIGINT"));
   process.once("SIGTERM", () => void shutdown("SIGTERM"));

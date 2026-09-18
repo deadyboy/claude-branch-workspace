@@ -1,12 +1,13 @@
 // Left pane: the persistent Conversation Tree (constitution two-tree
 // separation). Renders branches with status badge (running / attention /
-// error) + workspace-mode icon. Phase 4 = Shared-only (hard gate 14): no
-// selectable Worktree control exists here — banner states Worktree = Phase 6.
+// error) + explicit shared/worktree mode. The list is bounded so a project
+// with many branches stays responsive while search and pagination remain local.
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useStore, branchBusy, branchLastNode } from "../store/useStore";
 import { api } from "../api/client";
-import type { Branch, ConversationNode } from "../types";
+import { ForkDialog } from "./ForkDialog";
+import type { Branch } from "../types";
 
 function shortId(id: string): string {
   return id.slice(0, 4);
@@ -26,22 +27,61 @@ export function ConversationTree() {
   const states = useStore();
   const activeBranchId = states.activeBranchId;
   const all = states.branches;
-  // Only active (non-archived) branches are rendered; archived folded.
-  const branches = all.filter((b) => b.status === "active");
+  const [search, setSearch] = useState("");
+  const [activeOnly, setActiveOnly] = useState(true);
+  const [visibleLimit, setVisibleLimit] = useState(BRANCH_PAGE_SIZE);
   const [archivedOpen, setArchivedOpen] = useState(false);
-  const archived = all.filter((b) => b.status === "archived");
+
+  useEffect(() => {
+    setVisibleLimit(BRANCH_PAGE_SIZE);
+  }, [search, activeOnly]);
+
+  const matching = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase();
+    return all.filter((branch) => {
+      if (activeOnly && branch.status !== "active") return false;
+      if (!needle) return true;
+      return [branch.displayName ?? "", branch.id, branch.workspacePath ?? ""]
+        .some((value) => value.toLocaleLowerCase().includes(needle));
+    });
+  }, [activeOnly, all, search]);
+  const visible = matching.slice(0, visibleLimit);
+  const branches = visible.filter((b) => b.status === "active");
+  const archived = visible.filter((b) => b.status === "archived");
 
   return (
     <aside className="pane tree">
       <div className="pane-hd">
         <span>Conversation Tree</span>
-        <span className="badge subtle">Shared only · Worktree = Phase 6</span>
+        <span className="badge subtle">Shared / Worktree</span>
+      </div>
+      <div className="tree-filters">
+        <label className="tree-search">
+          <span className="sr-only">Search branches</span>
+          <input
+            aria-label="Search branches"
+            type="text"
+            value={search}
+            placeholder="Search branches…"
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+        <label className="active-filter">
+          <input
+            aria-label="Active branches only"
+            type="checkbox"
+            checked={activeOnly}
+            onChange={(event) => setActiveOnly(event.target.checked)}
+          />
+          Active only
+        </label>
+        <span className="tree-count">{visible.length} / {matching.length}</span>
       </div>
       <div className="tree-list">
         {branches.map((b) => (
           <BranchRow key={b.id} branch={b} active={b.id === activeBranchId} />
         ))}
-        {branches.length === 0 && <div className="empty">No branches yet</div>}
+        {branches.length === 0 && archived.length === 0 && <div className="empty">No matching branches</div>}
       </div>
       {archived.length > 0 && (
         <details open={archivedOpen} onToggle={(e) => setArchivedOpen((e.target as HTMLDetailsElement).open)}>
@@ -53,9 +93,16 @@ export function ConversationTree() {
           </div>
         </details>
       )}
+      {visible.length < matching.length && (
+        <button className="tree-more" onClick={() => setVisibleLimit((limit) => limit + BRANCH_PAGE_SIZE)}>
+          Show more ({matching.length - visible.length} remaining)
+        </button>
+      )}
     </aside>
   );
 }
+
+const BRANCH_PAGE_SIZE = 50;
 
 function BranchRow({ branch, active, muted = false }: { branch: Branch; active: boolean; muted?: boolean }) {
   const st = useStore();
@@ -65,7 +112,7 @@ function BranchRow({ branch, active, muted = false }: { branch: Branch; active: 
 
   const status = branchStatus(branch);
   const ancestryFork = branch.forkFromNodeId;
-  const originLabel = branch.originStrategy === "root"
+  const originLabel = branch.originStrategy === "root" || branch.originStrategy === "imported"
     ? branch.displayName ?? "(root)"
     : `${branch.displayName ?? "fork"} · ${ancestryFork ? "node " + shortId(ancestryFork) : ""}`;
 
@@ -93,58 +140,22 @@ function BranchRow({ branch, active, muted = false }: { branch: Branch; active: 
         {status === "attention" && <span className="badge attn">attention</span>}
         {status === "error" && <span className="badge err">error</span>}
         <span className="tree-id">{shortId(branch.id)}</span>
-        <span className="mode-tag">{branch.workspaceMode === "worktree" ? "W" : "S"}</span>
+        <span
+          className="mode-tag"
+          title={branch.workspaceMode === "worktree" ? "Isolated clean HEAD worktree" : "Shared files"}
+        >
+          {branch.workspaceMode === "worktree" ? "W" : "S"}
+        </span>
       </button>
       <div className="tree-actions">
-        <button onClick={() => setShowFork((v) => !v)} disabled={!last || muted} title="Fork from latest turn">
+        <button onClick={() => setShowFork((v) => !v)} disabled={muted} title="Fork from any completed turn">
           Fork
         </button>
         <button onClick={archive} disabled={muted} title="Archive branch">
           Archive
         </button>
       </div>
-      {showFork && last && <ForkDialog branch={branch} fromNode={last} onClose={() => setShowFork(false)} />}
-    </div>
-  );
-}
-
-function ForkDialog({ branch, fromNode, onClose }: { branch: Branch; fromNode: ConversationNode; onClose: () => void }) {
-  const st = useStore();
-  const [name, setName] = useState("");
-  const [busy, setBusy] = useState(false);
-
-  const doFork = async () => {
-    setBusy(true);
-    try {
-      await api.createFork(branch.projectId, fromNode.id, name || undefined);
-      const refreshed = await api.listBranches(branch.projectId);
-      st.setBranches(refreshed);
-      onClose();
-    } catch (e) {
-      alert(String(e instanceof Error ? e.message : e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <div className="fork-dialog">
-      <div>Fork new branch from turn {fromNode.localTurnIndex + 1}</div>
-      <input
-        type="text"
-        value={name}
-        placeholder="Branch name (optional)"
-        onChange={(e) => setName(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && !busy && doFork()}
-      />
-      <div className="fork-actions">
-        <button onClick={doFork} disabled={busy}>
-          {busy ? "Forking…" : "Fork"}
-        </button>
-        <button onClick={onClose} disabled={busy}>
-          Cancel
-        </button>
-      </div>
+      {showFork && <ForkDialog branch={branch} defaultNodeId={last?.status === "completed" ? last.id : null} onClose={() => setShowFork(false)} />}
     </div>
   );
 }

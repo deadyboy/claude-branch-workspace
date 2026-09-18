@@ -3,6 +3,12 @@
 
 export type WorkspaceMode = "shared" | "worktree";
 export type OriginStrategy =
+  | "native_head_fork"
+  | "native_historical_fork"
+  | "replay_reconstruction"
+  | "imported"
+  // Keep the older labels readable when the UI is connected to a pre-Phase6
+  // control plane. They are still opaque display metadata, never identity.
   | "root"
   | "fork_head"
   | "fork_node"
@@ -28,7 +34,9 @@ export interface Branch {
 export interface Project {
   id: string;
   name: string;
+  rootPath: string | null;
   createdAt: string;
+  updatedAt?: string;
 }
 
 export type ConversationNodeStatus = "pending" | "completed" | "failed" | "cancelled";
@@ -97,6 +105,15 @@ export interface EventFrame {
   runtimeSessionId: string | null;
   occurredAt: string;
   payload: unknown;
+}
+
+export interface WorkspaceStatus {
+  mode: WorkspaceMode;
+  path: string | null;
+  isGit: boolean;
+  dirty: boolean;
+  conflicts: string[];
+  sharedWith: string[];
 }
 
 // The server returns attention cards in this wire shape (GET /api/attention).

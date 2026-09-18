@@ -110,28 +110,29 @@ Phase-4 gates (S1–S3 done; S4 control-plane core + tests done; S5 server done;
 - [x] permission/attention state (g7, fake-seeded)
 - [x] restart/reconnect UX (socket status dot + REST catch-up + WS gap-fill)
 
-## P5 — Agent Control MCP
+## P5 — Agent Control MCP (COMPLETE, reviewed and real-agent verified 2026-09-18)
 
-- [ ] create_branch_from_node
-- [ ] send_message
-- [ ] list_branches
-- [ ] get_branch_status
-- [ ] interrupt_branch
-- [ ] archive_branch
-- [ ] query_execution_status
-- [ ] Main-agent integration test
+- [x] create_branch_from_node
+- [x] send_message
+- [x] list_branches
+- [x] get_branch_status
+- [x] interrupt_branch
+- [x] archive_branch
+- [x] query_execution_status
+- [x] get_turn_result
+- [x] Main-agent integration test (real outer and inner Claude through stdio MCP/HTTP)
 
 ## P6 — Scale/Isolation
 
-- [ ] Shared workspace mode
-- [ ] Isolated worktree mode
-- [ ] workspace conflict rules
-- [ ] 10 concurrent sessions
-- [ ] 20 concurrent sessions
-- [ ] target 40 concurrent workers/sessions where environment permits
-- [ ] process crash recovery
-- [ ] graceful shutdown
-- [ ] observability/performance report
+- [x] Shared workspace mode
+- [x] Isolated worktree mode
+- [x] workspace conflict rules (visible shared-write warning, no automatic merge)
+- [x] 10 concurrent sessions (real short cold-start workload, 10/10 complete)
+- [ ] 20 concurrent sessions — real test 14 complete / 6 native CLI exits; not accepted
+- [ ] target 40 concurrent workers/sessions where environment permits — synthetic only; real escalation stopped at 20
+- [x] process crash recovery (pending turns and unseeded fork orphan regressions)
+- [x] graceful shutdown (actual HTTP in-flight fork interruption)
+- [x] observability/performance report — PHASE5_6_HANDOFF.md
 
 ## Deferred / open items from Phase 0 review
 - [ ] Resolve bypassPermissions tension: constitution forbids default dangerous bypass; runtime is print-mode with default bypassPermissions. Decide & document default permission profile (auto/acceptEdits) and note permission/attention is interactive-only in v0 (MEDIUM, Phase 3 attention).

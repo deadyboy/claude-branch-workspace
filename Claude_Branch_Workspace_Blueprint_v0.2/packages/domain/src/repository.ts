@@ -104,6 +104,11 @@ export class Repository {
       .run(archivedAt, id);
   }
 
+  bindBranchWorkspace(id: string, mode: Branch["workspaceMode"], path: string | null, strategy?: Branch["originStrategy"]): void {
+    this.db.prepare(`UPDATE branches SET workspace_mode = ?, workspace_path = ?,
+      origin_strategy = COALESCE(?, origin_strategy) WHERE id = ?`).run(mode, path, strategy ?? null, id);
+  }
+
   // ---- nodes ----
   insertNode(n: ConversationNode): void {
     this.db

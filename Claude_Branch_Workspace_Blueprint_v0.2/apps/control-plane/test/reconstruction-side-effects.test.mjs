@@ -38,7 +38,10 @@ test("g2: reconstruction snapshot is content-only and pure (no tool/instructions
   await turn(svc, sm, adapter, bus, main.id, "T1");
   const t2 = await turn(svc, sm, adapter, bus, main.id, "T2");
 
-  // fork (reconstruction path by releasing parent so head no longer materialized)
+  // Make the fork point historical. A persisted idle parent mapping is eligible
+  // for a native head fork, so a later parent turn is the concrete discriminator
+  // for reconstruction here.
+  await turn(svc, sm, adapter, bus, main.id, "T3");
   sm.release(main.id);
   const created = await fo.createFork({ projectId: p.id, forkFromNodeId: t2.node.id, displayName: "Child" });
   assert.equal(created.strategy, "replay_reconstruction");
@@ -73,7 +76,10 @@ test("g2: fake flags ZERO tool/bash/mcp invocations during reconstruction", asyn
   await turn(svc, sm, adapter, bus, main.id, "T1");
   const t2 = await turn(svc, sm, adapter, bus, main.id, "T2");
 
-  // Baseline: the two parent turns each ran a sendMessage; count them so the
+  // Make t2 historical before measuring the fork window.
+  await turn(svc, sm, adapter, bus, main.id, "T3");
+
+  // Baseline: the three parent turns each ran a sendMessage; count them so the
   // fork window below is measured in isolation (g2 zero-side-effect).
   const baselineSend = adapter.calls.filter((c) => c[0] === "sendMessage").length;
   const callBase = adapter.calls.length;
@@ -129,8 +135,8 @@ test("g2 (adapter structural): real adapter reconstruction joins only message co
   const fn = src.slice(src.indexOf("async reconstructBranchFromHistory"));
   const fnBody = fn.slice(0, fn.indexOf("async interrupt"));
   assert.ok(fnBody.length > 0, "reconstruction function body found");
-  assert.ok(/\.visibleMessages\.map\(\(m\)\s*=>\s*m\.content\)/.test(fnBody),
-    "reconstruction joins ONLY visibleMessages[].content");
+  assert.ok(fnBody.includes("visibleMessages") && fnBody.includes("seedText"),
+    "reconstruction consumes only the supplied visible transcript and seed frame");
   // It builds a fresh session: --session-id, no resume/fork replay args.
   assert.ok(fnBody.includes("--session-id"), "reconstruction uses a fresh --session-id");
   assert.ok(!fnBody.includes("--resume"), "reconstruction does NOT --resume the parent session");

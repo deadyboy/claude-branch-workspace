@@ -1,5 +1,15 @@
 # Changelog
 
+## Phase 5/6 integration — 2026-09-18
+
+- Added official stdio MCP control surface and real Main-to-child dispatch acceptance.
+- Added worktree binding, bounded execution, database ownership and cancellation/shutdown handling.
+- Fixed streaming terminal truth, startup/fork races, crash-orphan recovery, endpoint precedence and settings pollution.
+- Added historical/worktree fork UI, workspace status, filters and no-event pending recovery.
+- Native Windows build and 127 default tests passed (3 separate opt-in live tests).
+- Independent code review PASS; live capacity boundary and evidence: `PHASE5_6_HANDOFF.md`.
+- No commit, merge, port-back or push performed.
+
 ## Phase 4 — Usable UI (COMPLETE, Gate PASS 2026-09-17 — independent review FAIL→PASS, reviewer APPROVE 15/15)
 
 - **S1 domain (gate 3/5/8/15)**: SCHEMA_VERSION 3 — `events.seq_rel` project-scoped monotonic cursor (backfill + `idx_events_project_seq`); explicit turn lifecycle `openTurn`→`completeTurn`/`failTurn`/`cancelTurn` (idempotent; `appendCompletedTurn` retained as a thin deprecated wrapper — reviewer B4); `getEffectiveConversation` (inherited/local + fork-point cutoff); `listEventsSince`/`lastEventSeqRel`; `reconcileTurnRuns`. Also added `svc.lastNode` + `svc.listAgentRunsByStatus` passthroughs for the control plane. 32/32 tests.

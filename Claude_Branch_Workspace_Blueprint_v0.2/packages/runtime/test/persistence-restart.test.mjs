@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClaudeCliAdapter } from "../dist/index.js";
 import { openDb, Repository, DomainService } from "@cbw/domain";
+import { SessionManager } from "../../../apps/control-plane/dist/session-manager.js";
+import { randomUUID } from "node:crypto";
 
 // Fake `claude` that echoes a minimal stream-json transcript so no live gateway
 // is needed. Emits init/assistant/result on every invocation.
@@ -32,18 +34,6 @@ function newRepo(dir) {
 // The duck-typed persistence hook the adapter needs. Wraps the domain Repository.
 function wirePersistence(repo) {
   return {
-    upsertRuntimeSession(s) {
-      repo.upsertRuntimeSession({
-        id: s.id,
-        branchId: s.branchId,
-        adapterType: s.adapterType,
-        externalSessionId: s.externalSessionId,
-        runtimeVersion: s.runtimeVersion,
-        status: s.status,
-        lastSeenAt: s.lastSeenAt,
-        metadataJson: s.metadataJson,
-      });
-    },
     getRuntimeSessionByExternalId(extId) {
       const rec = repo.getRuntimeSessionByExternalId(extId);
       if (!rec) return null;
@@ -63,28 +53,35 @@ test("BLOCKER: external-id mapping persists in domain DB and survives adapter re
   // (FK to branches.id), exactly as the control plane will do.
   const project = svc.createProject({ name: "restart-demo" });
   const branch = svc.createRootConversation({ projectId: project.id, rootBranchName: "Main" });
-  const mainKey = branch.id;
-
-  // First "control plane lifetime": adapter that writes to the domain repo.
+  // Production ownership: the manager writes, the adapter only looks up rows.
   const adapter1 = new ClaudeCliAdapter(fakeBin, [fakeScript], wirePersistence(repo));
-  await adapter1.startSession({
-    sessionId: mainKey,
-    cwd: dir,
-    workspaceMode: "shared",
-    branchId: mainKey,
-  });
+  const manager1 = new SessionManager(svc, adapter1);
+  const first = await manager1.resolveSession({ branchId: branch.id, cwd: dir });
+  const mainKey = first.sessionKey;
+  assert.notEqual(mainKey, branch.id, "session key must not masquerade as branch id");
 
   // The mapping is now in runtime_sessions (the domain fact source).
   const mapped = repo.getRuntimeSessionByExternalId(mainKey);
   assert.ok(mapped, "mapping persisted into domain runtime_sessions");
   assert.equal(mapped.id, mainKey, "sessionKey transaction id is the control-plane UUID");
+  assert.equal(mapped.branchId, branch.id);
+
+  // Reproduce the production fork path with different session and branch IDs.
+  // The former adapter upsert used newSessionId as branchId and failed the FK.
+  const forkPoint = svc.openTurn({ branchId: branch.id, userContent: "fork here" });
+  svc.completeTurn(forkPoint.id, { assistantContent: "answer", status: "completed" });
+  const childBranch = svc.createBranchFromNode({projectId:project.id, forkFromNodeId:forkPoint.id, displayName:"Child", originStrategy:"native_head_fork", workspaceMode:"shared"});
+  const child = await adapter1.forkFromHead(mainKey, {newSessionId:randomUUID(),cwd:dir});
+  assert.equal(repo.getRuntimeSessionByExternalId(child.externalSessionId), null, "adapter did not write the child mapping");
+  manager1.adoptSession(childBranch.id, child);
+  assert.equal(repo.getRuntimeSessionByExternalId(child.externalSessionId).branchId, childBranch.id);
 
   // Simulate a full control-plane restart: brand-new adapter, same repo,
   // no in-memory carry. It must recover the SAME sessionKey from the DB.
   const adapter2 = new ClaudeCliAdapter(fakeBin, [fakeScript], wirePersistence(repo));
-  const resumed = await adapter2.resumeSession(mapped.externalSessionId, dir);
+  const manager2 = new SessionManager(svc, adapter2);
+  const resumed = await manager2.resolveSession({ branchId: branch.id, cwd: dir });
   assert.equal(resumed.sessionKey, mainKey, "restart recovers original control-plane UUID, not a fresh key");
-  assert.equal(resumed.externalSessionId, mapped.externalSessionId);
 
   // Continuing on the recovered branch works (menu: EVASIVE resume -> send).
   const events = [];

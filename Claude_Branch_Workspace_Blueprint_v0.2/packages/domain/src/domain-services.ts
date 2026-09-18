@@ -167,6 +167,21 @@ export class DomainService {
     return this.repo.getBranch(branchId);
   }
 
+  listBranches(projectId: string): Branch[] {
+    return this.repo.listBranchesByProject(projectId);
+  }
+
+  bindBranchWorkspace(branchId: string, input: { mode: Branch["workspaceMode"]; path: string | null; originStrategy?: Branch["originStrategy"] }): Branch {
+    const branch = this.getBranch(branchId);
+    if (!branch) throw new DomainError("branch not found");
+    if (branch.workspacePath && input.path && branch.workspacePath !== input.path) {
+      throw new DomainError("workspace binding cannot change after creation");
+    }
+    if (!input.path && branch.status !== "archived") throw new DomainError("only archived workspaces can be detached");
+    this.repo.bindBranchWorkspace(branchId, input.mode, input.path, input.originStrategy);
+    return this.getBranch(branchId)!;
+  }
+
   /** Persist/refresh the control-plane session mapping (single fact source). */
   upsertRuntimeSession(input: {
     id: string;

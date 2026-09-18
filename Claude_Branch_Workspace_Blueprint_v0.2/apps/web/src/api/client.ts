@@ -10,6 +10,8 @@ import type {
   AgentRun,
   AttentionCardWire,
   EventFrame,
+  WorkspaceMode,
+  WorkspaceStatus,
 } from "../types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -31,23 +33,102 @@ export interface CreatedBranch {
   strategy: string;
 }
 
+type JsonRecord = Record<string, unknown>;
+
+const isRecord = (value: unknown): value is JsonRecord =>
+  typeof value === "object" && value !== null;
+
+function firstString(row: JsonRecord, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" && value.length > 0) return value;
+  }
+  return null;
+}
+
+function firstNumber(row: JsonRecord, ...keys: string[]): number | null {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() !== "") {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return null;
+}
+
+function parseRedactedPayload(value: unknown): unknown {
+  if (value !== undefined && typeof value !== "string") return value;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value);
+    } catch {
+      return {};
+    }
+  }
+  return {};
+}
+
+/**
+ * Normalize both live WS frames and persisted domain rows. The REST event
+ * endpoint returns persisted rows with `id` and `payloadJsonRedacted`, while
+ * the socket already uses the public EventFrame names.
+ */
+export function normalizeEventFrame(raw: unknown): EventFrame | null {
+  if (!isRecord(raw)) return null;
+  const eventId = firstString(raw, "eventId", "id");
+  const projectId = firstString(raw, "projectId", "project_id");
+  if (!eventId || !projectId) return null;
+  const type = firstString(raw, "type", "eventType") ?? "unknown";
+  const occurredAt = firstString(raw, "occurredAt", "occurred_at", "createdAt") ?? new Date().toISOString();
+  const status = firstString(raw, "status");
+  const seqRel = firstNumber(raw, "seqRel", "seq_rel") ?? 0;
+  return {
+    eventId,
+    seqRel,
+    type,
+    status,
+    projectId,
+    branchId: firstString(raw, "branchId", "branch_id"),
+    nodeId: firstString(raw, "nodeId", "node_id"),
+    agentRunId: firstString(raw, "agentRunId", "agent_run_id"),
+    runtimeSessionId: firstString(raw, "runtimeSessionId", "runtime_session_id"),
+    occurredAt,
+    payload: parseRedactedPayload(raw.payload ?? raw.payloadJsonRedacted ?? raw.payload_json_redacted),
+  };
+}
+
 export const api = {
   // ---- projects ----
   listProjects: () => req<Project[]>("/api/projects"),
-  createProject: (name: string) =>
-    req<Project>("/api/projects", { method: "POST", body: JSON.stringify({ name }) }),
+  createProject: (name: string, rootPath?: string) =>
+    req<Project>("/api/projects", {
+      method: "POST",
+      body: JSON.stringify({ name, ...(rootPath ? { rootPath } : {}) }),
+    }),
 
   // ---- branches ----
   listBranches: (projectId: string) => req<Branch[]>(`/api/projects/${projectId}/branches`),
-  createRoot: (projectId: string, displayName?: string) =>
+  createRoot: (projectId: string, displayName?: string, workspaceMode: WorkspaceMode = "shared") =>
     req<CreatedBranch>("/api/branches", {
       method: "POST",
-      body: JSON.stringify({ projectId, displayName: displayName ?? "Main" }),
+      body: JSON.stringify({ projectId, displayName: displayName ?? "Main", workspaceMode }),
     }),
-  createFork: (projectId: string, forkFromNodeId: string, displayName?: string) =>
+  createFork: (
+    projectId: string,
+    forkFromNodeId: string,
+    displayName?: string,
+    workspaceMode: WorkspaceMode = "shared"
+  ) =>
     req<CreatedBranch>("/api/branches", {
       method: "POST",
-      body: JSON.stringify({ projectId, forkFromNodeId, displayName: displayName ?? null }),
+      body: JSON.stringify({
+        projectId,
+        forkFromNodeId,
+        displayName: displayName ?? null,
+        workspaceMode,
+      }),
     }),
   renameBranch: (id: string, displayName: string) =>
     req<Branch>(`/api/branches/${id}`, {
@@ -59,6 +140,8 @@ export const api = {
     req<{ branchId: string; ancestors: { id: string; displayName: string | null }[] }>(
       `/api/branches/${id}/ancestry`
     ),
+  node: (id: string) => req<ConversationNode>(`/api/nodes/${id}`),
+  workspace: (id: string) => req<WorkspaceStatus>(`/api/branches/${id}/workspace`),
 
   // ---- conversation / nodes (gate 3) ----
   conversation: (branchId: string) =>
@@ -87,8 +170,13 @@ export const api = {
     }),
 
   // ---- events (gate 8, REST catch-up) ----
-  eventsAfter: (branchId: string, after: number) =>
-    req<{ events: EventFrame[]; latestSeqRel: number }>(
-      `/api/branches/${branchId}/events?after=${after}`
-    ),
+  eventsAfter: async (projectId: string, after: number, limit = 1000) => {
+    const body = await req<{ events: unknown[]; latestSeqRel: number }>(
+      `/api/projects/${projectId}/events?after=${encodeURIComponent(String(after))}&limit=${encodeURIComponent(String(limit))}`
+    );
+    return {
+      events: body.events.map(normalizeEventFrame).filter((event): event is EventFrame => event !== null),
+      latestSeqRel: Number.isFinite(body.latestSeqRel) ? body.latestSeqRel : after,
+    };
+  },
 };

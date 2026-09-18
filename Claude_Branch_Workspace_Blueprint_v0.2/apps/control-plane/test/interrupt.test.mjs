@@ -99,6 +99,11 @@ test("g6: interrupt Child cancels ONLY Child; Main completes; Child session inte
 
   const mainNode = svc.openTurn({ branchId: main.id, userContent: "M" });
   const childNode = svc.openTurn({ branchId: child.id, userContent: "C" });
+  // runTurnOnce is exercised directly here (outside the HTTP claim path), so
+  // mark both nodes in the SessionManager before testing branch-targeted
+  // interrupt behavior.
+  sm.markNode(main.id, mainNode.id);
+  sm.markNode(child.id, childNode.id);
 
   // Start both WITHOUT awaiting (they wait for queued batches).
   const mainP = runTurnOnce({ svc, bus, adapter, sessionKey: m.sessionKey, branchId: main.id, nodeId: mainNode.id, runtimeSessionId: m.sessionKey, text: "M" });

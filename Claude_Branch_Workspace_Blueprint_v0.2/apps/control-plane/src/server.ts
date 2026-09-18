@@ -14,6 +14,8 @@ import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import type { AppContext } from "./context.js";
+import { DomainError } from "@cbw/domain";
+import { CapacityUnavailable } from "./turn-scheduler.js";
 import { registerProjects } from "./routes/projects.js";
 import { registerBranches } from "./routes/branches.js";
 import { registerConversation } from "./routes/conversation.js";
@@ -38,6 +40,38 @@ const DEFAULT_ALLOWLIST = DEV_ALLOWLIST_HOSTS;
 export async function buildApp(opts: BuildAppOptions): Promise<import("fastify").FastifyInstance> {
   const { ctx, corsAllowlist = DEFAULT_ALLOWLIST, staticDir = null, logger = false } = opts;
   const app = Fastify({ logger });
+
+  // CORS controls response access, not whether a malicious page can POST.
+  app.addHook("onRequest", async (req, reply) => {
+    const host = req.headers.host ?? "";
+    let hostname = "";
+    try { hostname = new URL(`http://${host}`).hostname; } catch { /* reject below */ }
+    if (!["127.0.0.1", "localhost", "[::1]"].includes(hostname)) {
+      return reply.code(403).send({ error: "loopback host required" });
+    }
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${host}` && origin !== `https://${host}` && !corsAllowlist.includes(origin)) {
+      return reply.code(403).send({ error: "forbidden origin" });
+    }
+  });
+  app.setErrorHandler((err, _req, reply) => {
+    if (err instanceof CapacityUnavailable) return reply.code(409).send({ error: err.message });
+    if (err instanceof DomainError) {
+      const code = /not found/.test(err.message) ? 404 : /archived|pending|completed|binding/.test(err.message) ? 409 : 400;
+      return reply.code(code).send({ error: err.message });
+    }
+    return reply.code(500).send({ error: "operation failed; inspect runtime status" });
+  });
+
+  // preClose runs before Fastify waits for in-flight synchronous fork RPCs.
+  // onClose would wait for those same RPCs before it could interrupt them.
+  app.addHook("preClose", async () => {
+    if (!ctx.scheduler) return;
+    ctx.scheduler.close();
+    const ids = ctx.scheduler.snapshot().running;
+    await Promise.allSettled(ids.map(id => ctx.sessionManager.interrupt(id)));
+    if (!await ctx.scheduler.drain(15_000)) throw new Error("active turns did not stop; database remains open");
+  });
 
   // Cors: dev-only explicit allowlist (gate 12). Production is same-origin
   // (Fastify serves the SPA), so no permissive CORS is registered.
@@ -72,8 +106,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<import("fastify")
       app.setNotFoundHandler((req, reply) => {
         if (req.raw.method !== "GET") return reply.code(405).send({ error: "method not allowed" });
         if (/^\/(api|ws)\//.test(req.url)) return reply.code(404).send({ error: "not found" });
-        const index = resolve(dir, "index.html");
-        return reply.type("text/html").send(index);
+        return reply.sendFile("index.html");
       });
     }
   }

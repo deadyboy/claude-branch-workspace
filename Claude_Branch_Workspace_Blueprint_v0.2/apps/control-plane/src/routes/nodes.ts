@@ -9,10 +9,10 @@ export function registerNodes(app: FastifyInstance, ctx: AppContext): void {
     return ctx.repo.listNodesByBranch(id);
   });
 
-  app.get("/api/nodes/:id", async (req) => {
+  app.get("/api/nodes/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const n = ctx.svc.getNode(id);
-    if (!n) return { error: "node not found" };
+    if (!n) return reply.code(404).send({ error: "node not found" });
     return n;
   });
 }

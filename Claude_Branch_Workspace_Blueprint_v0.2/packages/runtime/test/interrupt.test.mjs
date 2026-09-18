@@ -68,7 +68,8 @@ test("g6 adapter: interrupt kills only the targeted session's child; other sessi
 
     // Main was NOT interrupted.
     assert.equal(adapter.wasInterrupted("main-1"), false, "main session not marked interrupted");
-    assert.equal(mainEvents.length, 0, "main still in flight (no child kill touched it)");
+    assert.ok(mainEvents.some(e => e.kind === "assistant"), "main progress streamed while child remains alive");
+    assert.ok(!mainEvents.some(e => e.kind === "result"), "main has not completed or been killed");
 
     // Now interrupt main too; it settles and is observed interrupted.
     await adapter.interrupt("main-1");

@@ -116,23 +116,13 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
           svc.completeAgentRun(ev.agentRunId, ev.type === "agent.completed" ? "completed" : "failed", ev.occurredAt);
         }
       }
-      // A normal termination (session.stopped) closes the turn's anonymous main
-      // run so the Agent Monitor never shows a stale running card (same as the
-      // legacy runTurn). CANCELLED is handled separately — cancelTurn closes the
-      // runs for pending nodes (gate 6), so we only close on completed/failed.
-      if (ev.type === "session.stopped" && ev.status !== "cancelled") {
-        const main = svc.listAgentRunsByBranch(ev.branchId).find((r) => r.type === "main" && r.status === "running");
-        if (main) {
-          svc.completeAgentRun(main.id, ev.status === "completed" ? "completed" : "failed", ev.occurredAt);
-        }
-      }
       return seqRel;
     },
   });
 
   const events: CanonicalEvent[] = [];
   const rawText: string[] = [];
-  let firstAssistant = true;
+  const assistantIndex = new Map<string, number>();
   let terminal: { status: "completed" | "failed"; stopReason: string | null; exitCode: number | null } | null = null;
   let cancelledByInterrupt = false;
   let errorMessage: string | null = null;
@@ -141,19 +131,23 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
     for await (const raw of adapter.sendMessage(args.sessionKey, { text: args.text })) {
       // Verbatim chat truth capture — BEFORE any observer scrub (gate 4).
       if (isAssistantText(raw)) {
-        if (firstAssistant) {
-          // First assistant text is the one to persist as chat truth. The
-          // observer's message.assistant.completed events are observability.
+        const key = raw.messageId ? `id:${raw.messageId}` : `text:${raw.text}`;
+        const prior = assistantIndex.get(key);
+        if (prior === undefined) {
+          assistantIndex.set(key, rawText.length);
           rawText.push(raw.text);
-          firstAssistant = false;
+        } else {
+          rawText[prior] = raw.text;
         }
       }
+      if (raw.kind === "error") errorMessage = "runtime_error";
       if (raw.kind === "result") {
         terminal = {
           status: raw.exitCode === 0 ? "completed" : "failed",
           stopReason: raw.stopReason ?? null,
           exitCode: raw.exitCode ?? null,
         };
+        continue; // Publish terminal state only after the stream ends successfully.
       }
       const evs = observer.feed(raw);
       events.push(...evs);
@@ -174,20 +168,25 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
 
   const status: TurnResult["status"] = cancelledByInterrupt
     ? "cancelled"
-    : terminal
-      ? terminal.status
-      : errorMessage
-        ? "failed"
-        : "cancelled"; // generator ended with no result → treat as cancelled (interrupted)
+    : errorMessage ? "failed" : terminal?.status ?? "failed";
 
   if (status === "cancelled") {
-    try { observer.cancel(); } catch { /* already terminated */ }
+    const cancelled = observer.cancel();
+    if (cancelled) events.push(cancelled);
+  } else {
+    events.push(...observer.feed({ kind: "result", exitCode: status === "completed" ? 0 : 1 }));
   }
-
+  // End only this turn's runs; a missing worker completion is never invented.
+  for (const run of svc.listAgentRunsByBranch(args.branchId)) {
+    if (run.ownerNodeId !== args.nodeId || run.status !== "running") continue;
+    svc.completeAgentRun(run.id,
+      status === "cancelled" ? "cancelled" : status === "completed" && run.type === "main" ? "completed" : "failed",
+      new Date().toISOString());
+  }
   return {
     result: {
       status,
-      stopReason: terminal?.stopReason ?? null,
+      stopReason: errorMessage ? "runtime_error" : terminal?.stopReason ?? (status === "failed" ? "missing_terminal_result" : null),
       assistantContent: rawText.length ? rawText.join("\n") : null,
       exitCode: terminal?.exitCode ?? null,
       eventCount: events.length,

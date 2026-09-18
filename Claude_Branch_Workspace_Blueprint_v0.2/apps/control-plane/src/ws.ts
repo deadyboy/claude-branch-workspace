@@ -64,22 +64,29 @@ function sendGapFill(
   projectId: string,
   afterSeqRel: number
 ): void {
-  let rows: { seqRel: number; projectId: string; branchId: string; nodeId: string | null; agentRunId: string | null; type: string; status: string | null; occurredAt: string; payloadJsonRedacted: string; id: string; runtimeSessionId: string | null }[];
-  try {
-    rows = ctx.svc.listEventsSince(projectId, afterSeqRel, 1000);
-  } catch { return; }
-  for (const row of rows) {
-    sendFrame(socket, rowFrame(row));
+  if (!Number.isSafeInteger(afterSeqRel) || afterSeqRel < 0) return;
+  let cursor = afterSeqRel;
+  for (;;) {
+    const rows = ctx.svc.listEventsSince(projectId, cursor, 1000);
+    for (const row of rows) {
+      if (!sendFrame(socket, rowFrame(row))) return;
+      cursor = row.seqRel;
+    }
+    if (rows.length < 1000) return;
   }
 }
 
-function sendFrame(socket: { send(p: string): void }, data: unknown): void {
+function sendFrame(socket: { send(p: string): void; bufferedAmount?: number; close?: (code: number, reason: string) => void }, data: unknown): boolean {
+  if ((socket.bufferedAmount ?? 0) > 1024 * 1024) {
+    socket.close?.(1013, "slow consumer; reconnect from durable cursor");
+    return false;
+  }
   if (typeof (socket as { OPEN?: number }).OPEN === "number") {
     // ws.WebSocket has readyState; guard against closed sockets.
     const ready = (socket as unknown as { readyState?: number }).readyState;
-    if (ready !== undefined && ready !== (socket as { OPEN?: number }).OPEN) return;
+    if (ready !== undefined && ready !== (socket as { OPEN?: number }).OPEN) return false;
   }
-  try { socket.send(JSON.stringify(data)); } catch { /* closed mid-send */ }
+  try { socket.send(JSON.stringify(data)); return true; } catch { return false; }
 }
 
 function evFrame(ev: CanonicalEvent): unknown {

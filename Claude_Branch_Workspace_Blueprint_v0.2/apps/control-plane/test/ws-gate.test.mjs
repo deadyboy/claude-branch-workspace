@@ -77,7 +77,7 @@ test("g8: ws hello.lastSeqRel gap-fills missed events then forwards live deltas"
 
   // Open a socket with a STALE cursor (0) → server gap-fills everything.
   const got = [];
-  const ws = await app.injectWS(`/ws/projects/${p.id}/events`, {}, {
+  const ws = await app.injectWS(`/ws/projects/${p.id}/events`, { headers: { host: "localhost" } }, {
     onOpen: (s) => s.on("message", (raw) => got.push(JSON.parse(String(raw)))),
   });
   ws.send(JSON.stringify({ hello: { lastSeqRel: 0 } }));
@@ -164,7 +164,7 @@ test("g8: reconnect REST catch-up refetches branches + agent-runs + conversation
 
 async function collectAfter(app, projectId, afterSeqRel) {
   const recv = [];
-  const ws = await app.injectWS(`/ws/projects/${projectId}/events`, {}, {
+  const ws = await app.injectWS(`/ws/projects/${projectId}/events`, { headers: { host: "localhost" } }, {
     onOpen: (s) => s.on("message", (raw) => recv.push(JSON.parse(String(raw)))),
   });
   ws.send(JSON.stringify({ hello: { lastSeqRel: afterSeqRel } }));

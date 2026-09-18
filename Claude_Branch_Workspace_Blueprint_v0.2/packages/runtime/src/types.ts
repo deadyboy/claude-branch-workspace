@@ -19,7 +19,7 @@ export interface StartSessionInput {
   projectInstructions?: string | null;
   workspaceMode: "shared" | "worktree";
   permissionMode?: string; // e.g. "acceptEdits"
-  branchId?: string; // owning branch id for persistence (defaults to sessionId)
+  branchId?: string; // optional owning branch identity; mappings are persisted by SessionManager
 }
 
 export interface MessageInput {
@@ -28,7 +28,7 @@ export interface MessageInput {
 
 export type RuntimeEvent =
   | { kind: "init"; externalSessionId: string; runtimeVersion?: string }
-  | { kind: "assistant"; text: string }
+  | { kind: "assistant"; text: string; messageId?: string }
   | { kind: "tool_use"; name: string; input: unknown; id?: string }
   | { kind: "tool_result"; toolUseId?: string; isError?: boolean }
   | { kind: "subagent_start"; name?: string; id?: string }

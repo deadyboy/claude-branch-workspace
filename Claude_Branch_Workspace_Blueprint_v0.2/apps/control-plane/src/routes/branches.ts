@@ -5,9 +5,12 @@
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../context.js";
 import { runTurnOnce } from "../turn-runner.js";
+import { QueueCancelled } from "../turn-scheduler.js";
 
 export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
   const { svc, repo, sessionManager, forkOrchestrator, bus, adapter } = ctx;
+  const workspaceManager = ctx.workspaceManager;
+  const scheduler = ctx.scheduler;
 
   app.get("/api/projects/:id/branches", async (req) => {
     const { id } = req.params as { id: string };
@@ -25,9 +28,13 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
     };
     if (!body.projectId) return reply.code(400).send({ error: "projectId is required" });
     if (!body.forkFromNodeId) {
+      if (body.workspaceMode === "worktree") {
+        return reply.code(400).send({ error: "root conversations cannot use worktree mode" });
+      }
       const b = svc.createRootConversation({ projectId: body.projectId, rootBranchName: body.displayName ?? "Main" });
+      if (workspaceManager) await workspaceManager.bind(b, body.cwd ?? null);
       return reply.code(201).send({
-        branch: b,
+        branch: svc.getBranch(b.id) ?? b,
         snapshot: null,
         sessionKey: null,
         strategy: "lazy_root",
@@ -43,11 +50,15 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
     return reply.code(201).send(created);
   });
 
-  app.get("/api/branches/:id", async (req) => {
+  app.get("/api/branches/:id", async (req, reply) => {
     const { id } = req.params as { id: string };
     const b = svc.getBranch(id);
-    if (!b) return { error: "branch not found" };
-    return b;
+    if (!b) return reply.code(404).send({ error: "branch not found" });
+    return {
+      ...b,
+      busy: sessionManager.hasActiveTurn(id),
+      queued: scheduler?.snapshot().queued.includes(id) ?? false,
+    };
   });
 
   app.patch("/api/branches/:id", async (req, reply) => {
@@ -65,7 +76,7 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
     const { id } = req.params as { id: string };
     const b = svc.getBranch(id);
     if (!b) return reply.code(404).send({ error: "branch not found" });
-    if (sessionManager.isBusy(id)) {
+    if (sessionManager.hasActiveTurn(id)) {
       return reply.code(409).send({ error: "branch is busy; interrupt before archiving" });
     }
     return svc.archiveBranch(id);
@@ -104,20 +115,72 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
     // double-opening during the real-CLI startSession spawn.
     sessionManager.claimTurn(id, node.id);
 
-    // The turn itself is invoked asynchronously; failures are observable via WS
-    // + the node going failed/cancelled.
-    void runTurnAsync(id, node.id, body.text, body.cwd);
+    // The turn itself is scheduled asynchronously; failures are observable via
+    // WS + the node going failed/cancelled. Keep the synchronous claim until a
+    // queued cancellation or the runner's terminal path releases it.
+    void submitTurn(id, node.id, body.text, body.cwd);
     return reply.code(202).send({ nodeId: node.id });
   });
 
-  async function runTurnAsync(branchId: string, nodeId: string, text: string, cwd?: string): Promise<void> {
+  async function submitTurn(branchId: string, nodeId: string, text: string, requestedCwd?: string): Promise<void> {
+    try {
+      const branch = svc.getBranch(branchId);
+      if (!branch) throw new Error(`branch ${branchId} not found`);
+      const cwd = workspaceManager
+        ? await workspaceManager.bind(branch, requestedCwd ?? null)
+        : requestedCwd ?? branch.workspacePath ?? svc.getProject(branch.projectId)?.rootPath ?? ".";
+      const run = () => runTurnAsync(branchId, nodeId, text, cwd);
+      if (scheduler) {
+        // Include the branch identity in the key. Shared workspaces remain
+        // visible to the UI, while one branch cannot deadlock another branch
+        // by waiting on a nested MCP/file operation in the same directory.
+        await scheduler.submit({
+          branchId,
+          projectId: branch.projectId,
+          workspace: `${cwd}#${branchId}`,
+          run,
+        });
+      } else {
+        await run();
+      }
+    } catch (err) {
+      if (err instanceof QueueCancelled) {
+        try { svc.cancelTurn(nodeId); } catch { /* node already terminal */ }
+        sessionManager.release(branchId);
+        return;
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      const cancelled = sessionManager.isCancellationRequested(branchId);
+      try {
+        if (cancelled) {
+          const key = sessionManager.getState(branchId)?.sessionKey ?? null;
+          svc.cancelTurn(nodeId, { runtimeSessionId: key });
+        } else {
+          svc.completeTurn(nodeId, { assistantContent: null, status: "failed" });
+        }
+      } catch { /* node already terminal */ }
+      sessionManager.release(branchId);
+      // eslint-disable-next-line no-console
+      console.error(`[turn ${branchId}/${nodeId}] ${msg}`);
+    }
+  }
+
+  async function runTurnAsync(branchId: string, nodeId: string, text: string, cwd: string): Promise<void> {
     try {
       const st = await sessionManager.resolveSession({
         branchId,
-        cwd: cwd ?? svc.getBranch(branchId)?.workspacePath ?? ".",
+        cwd,
       });
       // The in-flight node was claimed synchronously in the handler (gate 11)
       // and drained into st.nodeId by resolveSession; release() clears it at end.
+      // A pending-start interrupt is recorded on the materialized state. Do not
+      // start the user turn after cancellation; startSession may only have
+      // warmed the persistent runtime handle.
+      if (st.cancelRequested) {
+        svc.cancelTurn(nodeId, { runtimeSessionId: st.sessionKey });
+        sessionManager.release(branchId);
+        return;
+      }
       const { result } = await runTurnOnce({
         svc, bus, adapter,
         sessionKey: st.sessionKey,
@@ -137,8 +200,14 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
       sessionManager.release(branchId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      const cancelled = sessionManager.isCancellationRequested(branchId);
       try {
-        svc.completeTurn(nodeId, { assistantContent: null, status: "failed" });
+        if (cancelled) {
+          const key = sessionManager.getState(branchId)?.sessionKey ?? null;
+          svc.cancelTurn(nodeId, { runtimeSessionId: key });
+        } else {
+          svc.completeTurn(nodeId, { assistantContent: null, status: "failed" });
+        }
       } catch { /* node already terminal */ }
       try { sessionManager.release(branchId); } catch { /* already cleared */ }
       // eslint-disable-next-line no-console
@@ -153,12 +222,18 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/branches/:id/interrupt", async (req, reply) => {
     const { id } = req.params as { id: string };
     const st = sessionManager.getState(id);
-    if (!st) return reply.code(409).send({ error: "branch is idle" });
+    const pending = sessionManager.hasPendingClaim(id);
+    const pendingFork = sessionManager.hasPendingFork(id);
+    // A bound/adopted idle session is not an invocation. A pending claim is a
+    // real turn even before its runtime session has materialized. An eager fork
+    // bootstrap is likewise active until its child session is adopted or fails.
+    if (st?.nodeId == null && !pending && !pendingFork) return reply.code(409).send({ error: "branch is idle" });
+    const active = st?.nodeId != null;
+    const queued = scheduler?.cancelQueued(id) ?? false;
     const key = await sessionManager.interrupt(id);
-    const active = key !== null;
-    return reply.code(active ? 202 : 409).send(
-      active ? { interrupted: key } : { error: "branch is idle" }
-    );
+    if (active && key !== null) return reply.code(202).send({ interrupted: key });
+    if (pending || pendingFork || queued) return reply.code(202).send({ interruptRequested: true, queued });
+    return reply.code(409).send({ error: "branch is idle" });
   });
 
   // Breadcrumb (docs/10 §ancestry): this branch + its snapshot + ancestors.

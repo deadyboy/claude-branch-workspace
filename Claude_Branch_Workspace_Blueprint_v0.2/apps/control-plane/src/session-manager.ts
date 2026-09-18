@@ -20,6 +20,7 @@
 //   - interrupt(branchId) signals ONLY that branch's active invocation
 //     (gate 6); Main and Child turns run concurrently without interference.
 
+import { randomUUID } from "node:crypto";
 import type { DomainService, RuntimeSession as RuntimeSessionRow } from "@cbw/domain";
 import type { RuntimeAdapter, RuntimeSession } from "@cbw/runtime";
 
@@ -40,6 +41,19 @@ export class SessionManager {
   // never mistakes a claim for a materialized session. Drained on resolve; cleared
   // by release().
   private pendingClaim = new Map<string, string>();
+  // Cancellation requested while a claimed turn is still materializing. Keep
+  // the claim in place until the runner observes it so archive cannot slip
+  // through this window.
+  private pendingCancellation = new Set<string>();
+  // The UUID handed to startSession before its async warm-up completes. The
+  // runtime can use it to stop a child even before it has registered the
+  // external session handle.
+  private pendingSessionKey = new Map<string, string>();
+  // Synchronous reservation used while a native head fork re-registers an
+  // idle parent and seeds the child. It is deliberately separate from a turn
+  // claim: no conversation node is fabricated, but new turns/archive are still
+  // blocked for the short fork freeze window.
+  private pendingFork = new Set<string>();
 
   constructor(
     private readonly svc: DomainService,
@@ -67,7 +81,38 @@ export class SessionManager {
    * hitting a 409).
    */
   hasActiveTurn(branchId: string): boolean {
-    return this.state.get(branchId)?.nodeId != null || this.pendingClaim.has(branchId);
+    return this.state.get(branchId)?.nodeId != null || this.pendingClaim.has(branchId) || this.pendingFork.has(branchId);
+  }
+
+  /** Reserve an idle parent while a native head fork is being frozen. */
+  claimFork(branchId: string): boolean {
+    if (this.hasActiveTurn(branchId)) return false;
+    this.pendingFork.add(branchId);
+    return true;
+  }
+
+  /** Release a native-fork reservation without discarding the parent session. */
+  releaseFork(branchId: string): void {
+    this.pendingFork.delete(branchId);
+    this.pendingCancellation.delete(branchId);
+    this.pendingSessionKey.delete(branchId);
+  }
+
+  /** Track a runtime key before an eager seed starts so interrupt can target it. */
+  setPendingSessionKey(branchId: string, sessionKey: string): void {
+    this.pendingSessionKey.set(branchId, sessionKey);
+  }
+
+  /** Clear a pending runtime key if it still belongs to this bootstrap. */
+  clearPendingSessionKey(branchId: string, sessionKey?: string): void {
+    if (sessionKey === undefined || this.pendingSessionKey.get(branchId) === sessionKey) {
+      this.pendingSessionKey.delete(branchId);
+    }
+  }
+
+  /** True while an eager fork workspace/runtime seed is materializing. */
+  hasPendingFork(branchId: string): boolean {
+    return this.pendingFork.has(branchId);
   }
 
   /**
@@ -110,7 +155,21 @@ export class SessionManager {
     projectInstructions?: string | null;
   }): Promise<BranchSessionState> {
     const existing = this.state.get(input.branchId);
-    if (existing) return existing;
+    if (existing) {
+      // An eagerly adopted fork child already has a live state, but its first
+      // turn can claim the branch immediately afterwards. Drain that claim even
+      // on the existing-state path; otherwise the state stays falsely idle and
+      // a concurrent message can slip through after the claim is removed.
+      const claimedNodeId = this.pendingClaim.get(input.branchId);
+      if (claimedNodeId) {
+        existing.nodeId = claimedNodeId;
+        this.pendingClaim.delete(input.branchId);
+        if (this.pendingCancellation.delete(input.branchId)) {
+          existing.cancelRequested = true;
+        }
+      }
+      return existing;
+    }
 
     // A pending synchronous claim (gate 11 TOCTOU close) transfers its nodeId
     // into the materialized state so `hasActiveTurn` stays true continuously
@@ -133,21 +192,41 @@ export class SessionManager {
       }
       this.pendingClaim.delete(input.branchId);
       const st = this.mkState(input.branchId, bound.id, claimedNodeId);
+      st.cancelRequested = this.pendingCancellation.delete(input.branchId);
       this.state.set(input.branchId, st);
       return st;
     }
 
+    // Fork branches are promised an eagerly seeded runtime. If a process dies
+    // after the branch/snapshot commit but before the seed is adopted, there
+    // is no safe session to lazily invent on the next message: that would turn
+    // a fork into an empty root. Preserve the snapshot for diagnosis and make
+    // the orphan unusable instead.
+    const branch = this.svc.getBranch(input.branchId);
+    if (branch && (branch.parentBranchId !== null || branch.forkFromNodeId !== null)) {
+      try { this.svc.archiveBranch(branch.id); } catch { /* preserve the boundary error */ }
+      throw new Error(`fork branch ${branch.id} has no runtime session binding`);
+    }
+
     // (b) Root/import lazy start — fresh control-plane session via the adapter.
-    const started = await this.adapter.startSession({
-      sessionId: this.newLocalSessionId(),
-      cwd: input.cwd,
-      workspaceMode: "shared",
-      projectInstructions: input.projectInstructions ?? null,
-      branchId: input.branchId,
-    });
+    const sessionId = this.newLocalSessionId();
+    this.setPendingSessionKey(input.branchId, sessionId);
+    let started: RuntimeSession;
+    try {
+      started = await this.adapter.startSession({
+        sessionId,
+        cwd: input.cwd,
+        workspaceMode: "shared",
+        projectInstructions: input.projectInstructions ?? null,
+        branchId: input.branchId,
+      });
+    } finally {
+      this.clearPendingSessionKey(input.branchId, sessionId);
+    }
     this.persist(input.branchId, started);
     this.pendingClaim.delete(input.branchId);
     const st = this.mkState(input.branchId, started.sessionKey, claimedNodeId);
+    st.cancelRequested = this.pendingCancellation.delete(input.branchId);
     this.state.set(input.branchId, st);
     return st;
   }
@@ -178,6 +257,13 @@ export class SessionManager {
     if (existing) return existing;
     const bound = this.findBoundRow(input.branchId);
     if (bound) {
+      if (bound.externalSessionId) {
+        try {
+          await this.adapter.resumeSession(bound.externalSessionId, input.cwd);
+        } catch {
+          // Best-effort registration; the persisted local key remains stable.
+        }
+      }
       const st = this.mkState(input.branchId, bound.id, null);
       this.state.set(input.branchId, st);
       return st;
@@ -197,7 +283,26 @@ export class SessionManager {
    */
   async interrupt(branchId: string): Promise<string | null> {
     const st = this.state.get(branchId);
-    if (!st) return null;
+    // A claimed turn may still be waiting for startSession/resumeSession. Keep
+    // the claim and remember cancellation so the runner cancels the node as
+    // soon as materialization completes; there is no runtime child to signal
+    // yet. An adopted idle session has neither signal and is truly idle.
+    if (!st || st.nodeId == null) {
+      if (this.pendingClaim.has(branchId) || this.pendingFork.has(branchId)) {
+        this.pendingCancellation.add(branchId);
+        const startingKey = this.pendingSessionKey.get(branchId);
+        if (startingKey) {
+          try {
+            await this.adapter.interrupt(startingKey);
+          } catch {
+            // The adapter may not have spawned/registerd the child yet; the
+            // pending cancellation is still honored by the runner.
+          }
+          return startingKey;
+        }
+      }
+      return null;
+    }
     st.cancelRequested = true;
     try {
       await this.adapter.interrupt(st.sessionKey);
@@ -212,10 +317,18 @@ export class SessionManager {
     return this.pendingClaim.has(branchId);
   }
 
+  /** True when a turn was explicitly interrupted before it could run. */
+  isCancellationRequested(branchId: string): boolean {
+    return this.state.get(branchId)?.cancelRequested === true || this.pendingCancellation.has(branchId);
+  }
+
   /** Clear a branch's in-memory invocation state (turn ended). */
   release(branchId: string): void {
     this.state.delete(branchId);
     this.pendingClaim.delete(branchId);
+    this.pendingCancellation.delete(branchId);
+    this.pendingSessionKey.delete(branchId);
+    this.pendingFork.delete(branchId);
   }
 
   private mkState(branchId: string, sessionKey: string, nodeId: string | null): BranchSessionState {
@@ -250,6 +363,6 @@ export class SessionManager {
   }
 
   private newLocalSessionId(): string {
-    return `cp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    return randomUUID();
   }
 }

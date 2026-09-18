@@ -11,6 +11,8 @@ export interface AppContext {
   forkOrchestrator: import("./fork-orchestrator.js").ForkOrchestrator;
   attention: import("./attention-registry.js").AttentionRegistry;
   adapter: import("@cbw/runtime").RuntimeAdapter;
+  workspaceManager?: import("./workspace-manager.js").WorkspaceManager;
+  scheduler?: import("./turn-scheduler.js").TurnScheduler;
   /** Present only when CBW_FAKE_RUNTIME=1 (S7 E2E / hermetic tests). */
   fakeAdapter?: import("@cbw/runtime").RuntimeAdapter;
 }

@@ -53,13 +53,12 @@ test("g4: verbatim assistant text captured pre-scrub; ChatTruth = TurnResult", a
   sm.release(main.id);
 
   assert.equal(result.status, "completed");
-  // assistantContent === the raw stream verbatim pre-scrub (the FIRST assistant
-  // block is the one persisted as chat truth — turn-runner's documented design).
-  assert.equal(result.assistantContent, "export KEY=sk-CBWTEST-1234567890ABCDEF then run");
+  // Every distinct full assistant message is persisted, including after tools.
+  assert.equal(result.assistantContent, "export KEY=sk-CBWTEST-1234567890ABCDEF then run\nlogout");
 
   // Chat truth persists VERBATIM (no key-based redaction of ordinary text):
   const asst = svc.getEffectiveConversation(main.id).find((m) => m.role === "assistant");
-  assert.equal(asst.content, "export KEY=sk-CBWTEST-1234567890ABCDEF then run", "chat truth verbatim");
+  assert.equal(asst.content, "export KEY=sk-CBWTEST-1234567890ABCDEF then run\nlogout", "chat truth verbatim");
 
   // The OBSERVABLE canonical events are scrubbed (redaction is observability-only)
   const persisted = svc.listEventsByBranch(main.id);

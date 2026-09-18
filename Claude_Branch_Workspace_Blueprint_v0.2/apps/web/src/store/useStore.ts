@@ -13,6 +13,7 @@ import type {
   AttentionCard,
   AttentionCardWire,
   EventFrame,
+  WorkspaceStatus,
 } from "../types";
 
 export type ToolCardState = "running" | "ok" | "error" | "done";
@@ -47,6 +48,7 @@ interface CbwState {
   branches: Branch[];
   activeProjectId: string | null;
   activeBranchId: string | null;
+  workspaceByBranch: Record<string, WorkspaceStatus>;
   // node status per branch (for busy flag + badges)
   nodesByBranch: Record<string, ConversationNode[]>;
   // effective conversation per branch
@@ -71,6 +73,7 @@ interface CbwState {
   setActiveProject: (id: string | null) => void;
   setBranches: (b: Branch[]) => void;
   setActiveBranch: (id: string) => void;
+  setWorkspace: (branchId: string, workspace: WorkspaceStatus) => void;
   setNodes: (branchId: string, nodes: ConversationNode[]) => void;
   setConversation: (branchId: string, items: EffectiveConversationItem[]) => void;
   setAgentRuns: (branchId: string, runs: AgentRun[]) => void;
@@ -98,6 +101,7 @@ export const useStore = create<CbwState>((set, get) => ({
   branches: [],
   activeProjectId: null,
   activeBranchId: null,
+  workspaceByBranch: {},
   nodesByBranch: {},
   conversationByBranch: {},
   agentRunsByBranch: {},
@@ -114,6 +118,8 @@ export const useStore = create<CbwState>((set, get) => ({
   setActiveProject: (activeProjectId) => set({ activeProjectId }),
   setBranches: (branches) => set({ branches }),
   setActiveBranch: (activeBranchId) => set({ activeBranchId }),
+  setWorkspace: (branchId, workspace) =>
+    set((s) => ({ workspaceByBranch: { ...s.workspaceByBranch, [branchId]: workspace } })),
   setNodes: (branchId, nodes) =>
     set((s) => ({ nodesByBranch: { ...s.nodesByBranch, [branchId]: nodes } })),
   setConversation: (branchId, items) =>

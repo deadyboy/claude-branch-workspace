@@ -8,6 +8,7 @@
 // last acknowledged seqRel, so re-serving the same window across two
 // reconnects is idempotent.
 
+import { normalizeEventFrame } from "../api/client";
 import type { EventFrame } from "../types";
 
 export interface WsEvents {
@@ -88,13 +89,14 @@ export class WsStream {
     };
 
     ws.onmessage = (e) => {
-      let f: EventFrame;
+      let raw: unknown;
       try {
-        f = JSON.parse(String(e.data));
+        raw = JSON.parse(String(e.data));
       } catch {
         return;
       }
-      if (!f || typeof f.eventId !== "string") return;
+      const f = normalizeEventFrame(raw);
+      if (!f) return;
       // Bounded dedupe (gate 8): drop frames already applied via gap-fill or
       // a prior reconnect race.
       if (this.seen.has(f.eventId)) return;
