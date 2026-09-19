@@ -1,17 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { homedir } from "node:os";
-import { join } from "node:path";
-import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { ClaudeCliAdapter } from "../dist/index.js";
 
 // Phase 2 acceptance gate: a REAL Claude runtime session end-to-end. Requires
 // the desktop gateway to be live. RUN ONLY when CBW_LIVE=1 (opt-in), so the
 // default test suite stays hermetic/offline and never spends live turns.
-const raw = readFileSync(join(homedir(), ".claude", "settings.json"), "utf8");
-const settingsEnv = JSON.parse(raw).env ?? {};
-void settingsEnv;
 const live = process.env.CBW_LIVE === "1";
 
 test("phase2: real runtime fork-fidelity across restart", { skip: !live }, async () => {
