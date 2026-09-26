@@ -1,5 +1,15 @@
 # PROJECT STATE
 
+## Remote deployment — 2026-09-26 (see SERVER_DEPLOYMENT_HANDOFF.md)
+
+CBW now runs on the USTC server (control plane = systemd user service
+`cbw-control-plane`, boot-autostart via Linger) with local-only UI over two
+loopback SSH tunnels (auto-start keepers as Scheduled Tasks `CBWTunnelReverse`/
+`CBWTunnelForward`). Gate 12 preserved. BLOCKER: real turns fail because the LOCAL
+desktop-app auth is invalid ("Not logged in · Please run /login"; local
+ANTHROPIC_BASE_URL changed to `.../desktop`) — user-only fix (§11). Tunnels + server
+service are healthy. Full detail + diagnostics: `SERVER_DEPLOYMENT_HANDOFF.md`.
+
 ## Current integration — 2026-09-18
 
 Merged into main `master` via fast-forward (2026-09-18): `b93f225` → `d68055b`
