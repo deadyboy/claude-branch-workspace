@@ -1,14 +1,21 @@
 # PROJECT STATE
 
+## Remote deployment — RESOLVED 2026-09-27 (see SERVER_DEPLOYMENT_HANDOFF.md)
+
+Auth blocker FIXED (server settings token set to the real desktop credential + control-plane
+restart; user-authorized). Real turns work end-to-end. **Phase 6 scale now PASSES on the
+server: 20-way 20/20 and 40-way 40/40** (both peak at full concurrency; 40-way 69s). The
+40-way pass required expanding the local Vision Bridge credential pool from 3 to 5 upstream
+keys (effective concurrency 36→48). Previously 20-way was 14/20 FAIL on the 16 GB laptop.
+Evidence under `.runtime-experiments/capacity-1790448174742` (40-way) and `...4243562` (20-way).
+
 ## Remote deployment — 2026-09-26 (see SERVER_DEPLOYMENT_HANDOFF.md)
 
-CBW now runs on the USTC server (control plane = systemd user service
-`cbw-control-plane`, boot-autostart via Linger) with local-only UI over two
-loopback SSH tunnels (auto-start keepers as Scheduled Tasks `CBWTunnelReverse`/
-`CBWTunnelForward`). Gate 12 preserved. BLOCKER: real turns fail because the LOCAL
-desktop-app auth is invalid ("Not logged in · Please run /login"; local
-ANTHROPIC_BASE_URL changed to `.../desktop`) — user-only fix (§11). Tunnels + server
-service are healthy. Full detail + diagnostics: `SERVER_DEPLOYMENT_HANDOFF.md`.
+CBW runs on the USTC server (control plane = systemd user service `cbw-control-plane`,
+boot-autostart via Linger) with local-only UI over two loopback SSH tunnels
+(auto-start keepers as Scheduled Tasks `CBWTunnelReverse`/`CBWTunnelForward`).
+Gate 12 preserved. (The auth blocker recorded here was fixed 2026-09-27 — see above.)
+Full detail + diagnostics: `SERVER_DEPLOYMENT_HANDOFF.md`.
 
 ## Current integration — 2026-09-18
 

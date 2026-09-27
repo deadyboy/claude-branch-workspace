@@ -128,8 +128,8 @@ Phase-4 gates (S1–S3 done; S4 control-plane core + tests done; S5 server done;
 - [x] Isolated worktree mode
 - [x] workspace conflict rules (visible shared-write warning, no automatic merge)
 - [x] 10 concurrent sessions (real short cold-start workload, 10/10 complete)
-- [ ] 20 concurrent sessions — real test 14 complete / 6 native CLI exits; not accepted
-- [ ] target 40 concurrent workers/sessions where environment permits — synthetic only; real escalation stopped at 20
+- [x] 20 concurrent sessions — real test PASSED on server 2026-09-27: 20/20, 0 failed, peak 20 (was 14/20 FAIL on the 16 GB laptop; evidence `capacity-1790444243562/result.json`)
+- [x] target 40 concurrent workers/sessions where environment permits — real 40-way PASSED on server 2026-09-27: 40/40, 0 failed, peak 40, 69s (evidence `capacity-1790448174742/result.json`). A prior 40-way run failed 28/40 with warm-up `startTurnTimeoutMs` (120s) timeouts because the gateway pool held only 3 keys (36 concurrent); expanding the pool to 5 keys raised effective concurrency to the global ceiling (48 in-flight / 72 RPM) and 40-way passes. NOTE: environment-dependent — depends on the local gateway pool depth, not on host resources.
 - [x] process crash recovery (pending turns and unseeded fork orphan regressions)
 - [x] graceful shutdown (actual HTTP in-flight fork interruption)
 - [x] observability/performance report — PHASE5_6_HANDOFF.md
