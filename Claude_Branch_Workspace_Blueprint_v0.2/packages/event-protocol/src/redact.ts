@@ -45,6 +45,24 @@ function looksSecretValue(v: unknown): boolean {
   // segments, each ≥ 4 chars, header/footer bounded by non-token chars).
   if (/\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/i.test(s)) return true;
   if (/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.test(s)) return true;
+  // Other vendors' opaque token formats. These are "known format" rules: a
+  // distinctive prefix + a long opaque body, bounded like the `sk-`/GitHub
+  // cases so a bare token or one inside a command/URL/path is untrusted whole.
+  if (/\b(?:AKIA|ASIA)[A-Z0-9]{16}/.test(s)) return true; // AWS access key / session key
+  if (/\bAIza[A-Za-z0-9_\-]{35}/.test(s)) return true; // Google API key
+  if (/\bhf_[A-Za-z0-9]{20,}/.test(s)) return true; // Hugging Face (user/org tokens)
+  if (/\bxox[bapso]-[A-Za-z0-9\-]{20,}/.test(s)) return true; // Slack bot/app/etc tokens
+  if (/\bBasic\s+[A-Za-z0-9+/=]{16,}/i.test(s)) return true; // Authorization: Basic base64
+  // Basic-auth userinfo in a URL (`https://user:pass@host/…`) — the `:`+`@`
+  // between two opaque fields is a strong signal even when the password is not
+  // secret-prefixed.
+  if (/(?:^|[^A-Za-z0-9])[A-Za-z0-9._~-]+:[^@\/\s]{8,}@/.test(s)) return true;
+  // `curl -u user:pass` / `--user user:pass` — the classic inline passthrough.
+  // Password side must be ≥ 8 non-space chars so `-u user` alone or `-u a:b`
+  // (tiny) is left alone. Explicit non-word preceding bound (NOT `\b` — a
+  // leading space→`-` is non-word→non-word, which `\b` does not count).
+  if (/(?:^|[^A-Za-z0-9_-])-u(?:\s+|=)[A-Za-z0-9_.-]+:[A-Za-z0-9!@#$%^&*_~\-=+./]{8,}/.test(s)) return true;
+  if (/(?:^|[^A-Za-z0-9_-])--user(?:\s+|=)[A-Za-z0-9_.-]+:[A-Za-z0-9!@#$%^&*_~\-=+./]{8,}/.test(s)) return true;
   // PEM/DER private-key blocks (any algorithm; the run is bounded by header and
   // footer). Only when a full block is present — a bare `PRIVATE KEY` word alone
   // is not enough.

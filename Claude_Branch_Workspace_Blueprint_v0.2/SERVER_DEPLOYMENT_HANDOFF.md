@@ -1,8 +1,9 @@
 # Server deployment handoff — updated 2026-09-27 (values in this doc are REDACTED; local copy holds real ones)
 
 > **Security note:** this file in the public repository intentionally shows only
-> placeholders. The live values (server host/user, paths, ports) live in your
-> **local** copy and in `scripts/cbw-tunnel/config.local.ps1` (gitignored). See
+> placeholders. The live values (server host/user and machine-specific filesystem
+> paths) live in your **local** copy and in `scripts/cbw-tunnel/config.local.ps1`
+> (gitignored). Port numbers are not secret and appear inline below. See
 > `SENSITIVE_REFERENCE.md` (kept only locally) for the real inventory.
 
 Read this first in a new session. It covers the "run CBW on the USTC server,
@@ -10,7 +11,7 @@ local UI only" setup: how it works, current state, and what to do next.
 
 ## What this is
 
-The whole CBW stack runs on the USTC GPU server (host/user rounded by the local
+The whole CBW stack runs on the USTC GPU server (host/user defined by the local
 `config.local.ps1`), so RAM/CPU stay off the 16 GB laptop. The laptop only
 renders UI. This was requested because real 20-way local concurrency OOM-crashed
 the laptop; the server has ~2 TB RAM.
@@ -108,10 +109,11 @@ ssh -i "$CBW_SSH_KEY" "$CBW_SSH_TARGET" 'curl -s -o /dev/null -w "server->gw %{h
 
 Real-turn smoke test (project/root-branch ids in this DB):
 ```bash
-curl -s -X POST http://127.0.0.1:15723/api/branches/ca20f6a9-7f4c-4d79-8307-1a1867924b03/messages \
+curl -s -X POST http://127.0.0.1:15723/api/branches/<root-branch-id>/messages \
   -H "Content-Type: application/json" -d '{"text":"Reply with exactly: OK"}'
 ```
-Then GET `.../api/branches/<id>/conversation`.
+Then GET `.../api/branches/<id>/conversation`. Replace `<root-branch-id>` with
+the root-branch id of a project in this DB.
 
 Phase 6 scale (run on the server, inside the cbw22 env):
 ```bash

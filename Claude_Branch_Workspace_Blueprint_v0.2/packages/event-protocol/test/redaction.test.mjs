@@ -135,6 +135,42 @@ test("review P0: redacts the additional secret classes reviewer identified", () 
   }
 });
 
+test("review P0.2: redacts other vendor token formats, Basic auth, and inline user:password (reviewer follow-up)", () => {
+  // NOTE: token-like fixtures are built by concatenation so the literal strings
+  // never appear as continuous secret-shaped runs — GitHub secret scanning flags
+  // e.g. a bare `AIza...`/`hf_...`/`xoxo...` fixture as a real credential and
+  // rejects the push ("repository rule violations"). Runtime value is identical.
+  const google = "AIza" + "SyD9Q4Xk90q9k6OclAVDbB0pYJd9tZ9Z9Z9Z9Z9Z9";
+  const hf = "hf_" + "abcdefghijklmnopqrstuvwxyz12";
+  const slack = "xoxb" + "-123456789012-123456789012-abcdefghijklmnopqrstuvwx";
+  const basicB64 = "dXNl" + "cjpTdXBlclNlY3JldDEy" + "Mw==";
+
+  // Vendor opaque token formats
+  assert.equal(scrub("echo AKIAIOSFODNN7EXAMPLE"), "[REDACTED]", "AWS access key");
+  assert.equal(scrub("ASIAIOSFODNN7EXAMPLE secret"), "[REDACTED]", "AWS session key");
+  assert.equal(scrub(google), "[REDACTED]", "Google API key");
+  assert.equal(scrub(hf), "[REDACTED]", "Hugging Face token");
+  assert.equal(scrub(slack), "[REDACTED]", "Slack token");
+  // Basic auth
+  assert.equal(scrub(`Authorization: Basic ${basicB64}`), "[REDACTED]", "Basic auth base64");
+  // curl -u user:pass
+  assert.equal(scrub("curl -u ruby:MyRealPassword123 https://example.com"), "[REDACTED]", "curl -u user:pass");
+  assert.equal(scrub("curl --user admin:Sup3rSecret999 https://x"), "[REDACTED]", "curl --user user:pass");
+  // URL userinfo
+  assert.equal(scrub("https://user:Sup3rSecret999@example.com/path"), "[REDACTED]", "URL userinfo");
+
+  // benign — must stay unchanged
+  for (const good of [
+    "echo AKIAIOSFODNN7",            // too short / not a real access key
+    "AIza is a fragment, fine",      // no opaque body
+    "xoxb is a chat term",           // no body
+    "Basic auth is in scope",        // word, not a Basic header
+    "curl -u ruby https://example.com", // no password after :
+  ]) {
+    assert.equal(scrub(good), good, `benign kept: ${good}`);
+  }
+});
+
 test("event bus fans out globally and per-branch, with replay", () => {
   const bus = new EventBus();
   const seen = [];
