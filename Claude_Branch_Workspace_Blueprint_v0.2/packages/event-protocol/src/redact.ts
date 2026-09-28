@@ -36,13 +36,40 @@ function looksSecretValue(v: unknown): boolean {
   // path segment (`key/sk-…/seg`) or an `export FOO=sk-…` command all untrust
   // the ENTIRE string — never leaks as a prefix/substring of a longer value.
   if (/(?:^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}(?:$|[^A-Za-z0-9_-])/.test(s)) return true;
+  // GitHub credentials: classic PAT (ghp_), fine-grained (github_pat_), and the
+  // OAuth/user/SSH/app tokens (gho_/ghu_/ghs_/ghr_). Same boundary rule.
+  if (/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}/.test(s)) return true;
+  if (/\bgithub_pat_[A-Za-z0-9_]{40,}/.test(s)) return true;
+  // Bearer tokens / JWT-ish blobs. An explicit `Bearer <blob>` of letter/digit
+  // length ≥ 20, or a free-standing `eyJ…` JWT (three dot-separated b64url
+  // segments, each ≥ 4 chars, header/footer bounded by non-token chars).
+  if (/\bBearer\s+[A-Za-z0-9._~+/=-]{20,}/i.test(s)) return true;
+  if (/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/.test(s)) return true;
+  // PEM/DER private-key blocks (any algorithm; the run is bounded by header and
+  // footer). Only when a full block is present — a bare `PRIVATE KEY` word alone
+  // is not enough.
+  if (/-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]{10,}-----END [A-Z0-9 ]*PRIVATE KEY-----/.test(s)) return true;
   // `export NAME=…` / `set NAME=…` where NAME smells like a secret AND the
   // assigned value looks like one (an opaque long value). Variable-name alone
   // (e.g. NOT_A_KEY=…) is not enough — the value side must confirm.
   if (/\b(?:export|set)\s+\w*(?:token|key|secret|passwd|password|auth|credential)\w*\s*=\s*["']?(\S+)/i.exec(s)) {
     const val = RegExp.$1;
-    if (/^sk-|^ANTHROPIC_|^[A-Za-z0-9_-]{24,}$/.test(val)) return true;
+    if (/^sk-|^ANTHROPIC_|^gh[pousr]_|^github_pat_|^eyJ|^[A-Za-z0-9_-]{24,}$/.test(val)) return true;
   }
+  // Inline credential passthroughs that do not rely on a variable name:
+  //   --password <opaque> / password: <opaque> / password=<opaque> / -u u:pass
+  // The value must be opaque (≥ 8 chars, no spaces) AND not a common benign
+  // placeholder (e.g. `--password 123456`, `password: default`). `password`
+  // must be preceded by a boundary (line start or non-letter) so a benign word
+  // like `notAPassword` is not matched.
+  if (/(?:^|[\s'"\-=;:,])password(?:[=:]|[ \t]+)\s*["']?([A-Za-z0-9!@#$%^&*_~\-=+./]{8,})/i.exec(s)) {
+    const val = RegExp.$1;
+    if (!/^(?:default|changeme|12345678?|password|passw0rd|admin|secret|none|test)$/i.test(val)) return true;
+  }
+  // Cookie headers: `Cookie: name=opaque-value` / `Set-Cookie: ...` pasted from
+  // a network dump. The value must be ≥ 16 chars of non-space — a short value
+  // (`Cookie: foo=bar`) or the word `Cookie` without a header form is benign.
+  if (/\b(?:Set-)?Cookie:\s*["']?\w+\s*=\s*["']?[A-Za-z0-9._~+/=\-]{16,}/i.test(s)) return true;
   return false;
 }
 

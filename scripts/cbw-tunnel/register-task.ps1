@@ -10,6 +10,15 @@
 
 $ErrorActionPreference = "Stop"
 
+# Load local-only config; keepers consume it at run time, but fail fast here too
+# so a misconfigured machine surfaces the error at registration time.
+$Config = Join-Path $PSScriptRoot "config.local.ps1"
+if (-not (Test-Path $Config)) {
+  Write-Error "Missing $Config — copy config.local.example.ps1 to config.local.ps1 and fill in real values."
+  exit 1
+}
+. $Config
+
 $PsExe = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
 
 $keepers = @(

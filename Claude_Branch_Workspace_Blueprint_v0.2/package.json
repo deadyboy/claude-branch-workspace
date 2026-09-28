@@ -13,7 +13,7 @@
     "mcp": "node apps/mcp-server/dist/index.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "packageManager": "pnpm@11.22.0"
 }

@@ -17,7 +17,7 @@ boot-autostart via Linger) with local-only UI over two loopback SSH tunnels
 Gate 12 preserved. (The auth blocker recorded here was fixed 2026-09-27 — see above.)
 Full detail + diagnostics: `SERVER_DEPLOYMENT_HANDOFF.md`.
 
-## Current integration — 2026-09-18
+## Previous integration — 2026-09-18 (superseded — see "Remote deployment — RESOLVED 2026-09-27" above)
 
 Merged into main `master` via fast-forward (2026-09-18): `b93f225` → `d68055b`
 → `9767e8d`. Phase 5 MCP is complete, functional/code-review gate PASS. Phase 6

@@ -1,13 +1,19 @@
-# Server deployment handoff — updated 2026-09-27
+# Server deployment handoff — updated 2026-09-27 (values in this doc are REDACTED; local copy holds real ones)
+
+> **Security note:** this file in the public repository intentionally shows only
+> placeholders. The live values (server host/user, paths, ports) live in your
+> **local** copy and in `scripts/cbw-tunnel/config.local.ps1` (gitignored). See
+> `SENSITIVE_REFERENCE.md` (kept only locally) for the real inventory.
 
 Read this first in a new session. It covers the "run CBW on the USTC server,
 local UI only" setup: how it works, current state, and what to do next.
 
 ## What this is
 
-The whole CBW stack runs on the USTC GPU server (`jianf@210.45.73.166`), so RAM/CPU
-stay off the 16 GB laptop. The laptop only renders UI. This was requested because
-real 20-way local concurrency OOM-crashed the laptop; the server has ~2 TB RAM.
+The whole CBW stack runs on the USTC GPU server (host/user rounded by the local
+`config.local.ps1`), so RAM/CPU stay off the 16 GB laptop. The laptop only
+renders UI. This was requested because real 20-way local concurrency OOM-crashed
+the laptop; the server has ~2 TB RAM.
 
 ## Architecture (full chain)
 
@@ -21,8 +27,8 @@ local browser
 Both tunnels are loopback-bound; gate 12 (control plane binds 127.0.0.1 only) is
 preserved — no code change was needed.
 
-The gateway at `127.0.0.1:15722` is the **Claude Vision Bridge**
-(`F:\CodexTemp\claude-vision-bridge\bridge.mjs`), which also holds the pool of
+The gateway at `127.0.0.1:15722` is the **Claude Vision Bridge** (a local
+`bridge.mjs`; exact path in the local reference), which also holds the pool of
 upstream API keys (see Gotchas).
 
 ## Components and where they live
@@ -39,8 +45,8 @@ upstream API keys (see Gotchas).
 ### Server — control plane as a systemd user service
 - Unit: `~/.config/systemd/user/cbw-control-plane.service` (enabled, Restart=always;
   user has `Linger=yes`, so it starts at boot WITHOUT login).
-- Project: `/data3/jianf/claude-branch-workspace-test/Claude_Branch_Workspace_Blueprint_v0.2`
-- conda env: `/data3/jianf/conda-envs/cbw22` (Node 22.23 + pnpm 11.27 + claude 2.1.278)
+- Project: `<server-project-dir>/Claude_Branch_Workspace_Blueprint_v0.2`
+- conda env: `<server-conda-env>/cbw22` (Node 22.23 + pnpm 11.27 + claude 2.1.278)
 - DB: `<proj>/data/cbw.db`  |  Unit env: CBW_BASE_URL=127.0.0.1:15722, CBW_PORT=15723
 - Checks: `systemctl --user status cbw-control-plane` / `journalctl --user -u cbw-control-plane`
 
@@ -48,11 +54,11 @@ upstream API keys (see Gotchas).
 
 - Tunnels up, local->CP 200, server->gateway 200, control plane active, file-launcher OK.
 - **Auth FIXED** (user-authorized this session). The server `~/.claude/settings.json`
-  `env.ANTHROPIC_AUTH_TOKEN` was set to the real desktop credential (44 chars, read from the
-  local `~/.claude-bridge/local-credential.txt`); backup `settings.json.bak-cred-<ts>` kept,
-  mode 600. The `cbw-control-plane` service was **restarted** so the adapter's cached gateway
-  env (read once in its constructor, `claude-cli-adapter.ts:97`) picks up the new token —
-  without the restart the live service kept the stale `PROXY_MANAGED` placeholder.
+  `env.ANTHROPIC_AUTH_TOKEN` was set to the real desktop credential (44 chars, read from a
+  local credential file kept off-repo); backup `settings.json.bak-cred-<ts>` kept, mode 600.
+  The `cbw-control-plane` service was **restarted** so the adapter's cached gateway env (read
+  once in its constructor, `claude-cli-adapter.ts:97`) picks up the new token — without the
+  restart the live service kept the stale `PROXY_MANAGED` placeholder.
 - **No `/desktop` change was needed.** The server keeps a bare `:15722` base and works; the
   bridge accepts the credential on both the `/desktop`-prefixed and the plain paths.
 - **Verified end-to-end:** server `claude -p` → `OK`; the CBW child path (fresh UUID, tools
@@ -97,7 +103,7 @@ Links:
 curl -s -o /dev/null -w "local->CP %{http_code}\n" http://127.0.0.1:15723/
 ```
 ```bash
-ssh -i ~/.ssh/id_rsa jianf@210.45.73.166 'curl -s -o /dev/null -w "server->gw %{http_code}\n" http://127.0.0.1:15722/'
+ssh -i "$CBW_SSH_KEY" "$CBW_SSH_TARGET" 'curl -s -o /dev/null -w "server->gw %{http_code}\n" http://127.0.0.1:15722/'
 ```
 
 Real-turn smoke test (project/root-branch ids in this DB):
@@ -114,7 +120,7 @@ CBW_CAPACITY_STAGES=40 node scripts/phase6-capacity-live.mjs   # 5,10,20 also va
 
 ## Hard-won gotchas
 
-- **Vision Bridge upstream keys** live in **CC Switch's SQLite DB** — `~/.cc-switch/cc-switch.db`,
+- **Vision Bridge upstream keys** live in **CC Switch's SQLite DB** (path in the local reference),
   table `providers`, rows where `app_type='claude-desktop'`, token at
   `settings_config.env.ANTHROPIC_AUTH_TOKEN` (`credential-pool.mjs:loadDesktopCredentials`).
   Duplicates are de-duped. The bridge reads keys **only at startup**, so adding a key requires a
@@ -130,8 +136,8 @@ CBW_CAPACITY_STAGES=40 node scripts/phase6-capacity-live.mjs   # 5,10,20 also va
   `$PSScriptRoot`. This is why the scripts live under `F:\claudetreespace\` (ASCII).
 - node `os.tmpdir()` != Git-Bash `/tmp` on Windows; build transfer files with
   `os.tmpdir()`.
-- home disk on the server is ~100% full — work only under `/data3/jianf` (777);
-  `/data3` itself is root-owned.
+- home disk on the server is ~100% full — work only under the user's 777 work
+  directory (e.g. a `/data3/<user>` style root); that root itself may be root-owned.
 
 ## Constraints (constitution / user rules — keep honoring)
 

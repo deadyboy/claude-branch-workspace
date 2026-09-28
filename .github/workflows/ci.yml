@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [master, "hardening/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: Claude_Branch_Workspace_Blueprint_v0.2
+
+jobs:
+  build-test:
+    name: build + test (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+          cache-dependency-path: Claude_Branch_Workspace_Blueprint_v0.2/pnpm-lock.yaml
+
+      - name: Install deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test (unit + integration, fake runtime)
+        run: pnpm test
+
+  e2e:
+    name: e2e (playwright, real control plane + fake runtime)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: Claude_Branch_Workspace_Blueprint_v0.2/pnpm-lock.yaml
+
+      - name: Install deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # Playwright config uses channel:"chrome" (system Chrome) locally; on CI
+      # install both the bundled chromium and the chrome channel plus OS deps.
+      - name: Install Playwright browsers
+        working-directory: Claude_Branch_Workspace_Blueprint_v0.2/apps/web
+        run: npx playwright install --with-deps chromium chrome
+
+      - name: E2E
+        run: pnpm test:e2e

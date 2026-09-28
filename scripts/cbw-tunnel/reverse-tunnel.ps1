@@ -9,9 +9,18 @@
 
 $ErrorActionPreference = "Continue"
 
+# Load local-only config (host/key/ports). Fail loudly if missing — the public
+# repo never ships real values; operators copy config.local.example.ps1.
+$Config = Join-Path $PSScriptRoot "config.local.ps1"
+if (-not (Test-Path $Config)) {
+  Write-Error "Missing $Config — copy config.local.example.ps1 to config.local.ps1 and fill in real values."
+  exit 1
+}
+. $Config
+
 $SshExe  = "C:\Windows\System32\OpenSSH\ssh.exe"
-$KeyFile = Join-Path $env:USERPROFILE ".ssh\id_rsa"
-$Target  = "jianf@210.45.73.166"
+$KeyFile = $CbwSshKey
+$Target  = $CbwSshTarget
 $LogDir  = Join-Path $PSScriptRoot "logs"
 $LogFile = Join-Path $LogDir "reverse-tunnel.log"
 
@@ -34,7 +43,7 @@ $sshArgs = @(
   "-o", "ServerAliveInterval=30",
   "-o", "ServerAliveCountMax=3",
   "-o", "StrictHostKeyChecking=accept-new",
-  "-R", "127.0.0.1:15722:127.0.0.1:15722",
+  "-R", "127.0.0.1:${CbwReversePort}:127.0.0.1:${CbwReversePort}",
   $Target
 )
 
