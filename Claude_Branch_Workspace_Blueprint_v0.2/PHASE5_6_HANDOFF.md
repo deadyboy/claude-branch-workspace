@@ -26,9 +26,12 @@ programmatic copy-back separate from the fast-forward).
 ## Verification
 
 Phase 5 functional gate: PASS. Independent code-review gate: PASS.
-Phase 6 isolation/recovery/UI code is implemented; scale acceptance is PARTIAL
-because real 20-way CLI startup is not reliable on this machine. No 40-way real
-test was attempted after the failed 20-way stage.
+Phase 6 isolation/recovery/UI code is implemented; scale acceptance was PARTIAL
+because real 20-way CLI startup was not reliable on this (16 GB) machine; no
+40-way real test was attempted after the failed 20-way stage. **Updated
+2026-09-27: real 20-way AND 40-way now PASS on the USTC GPU server (2 TB RAM) —
+see "Server capacity" below. The FAIL/not-supported conclusions on this machine
+are a *host* limit (16 GB laptop), not a code limit.**
 
 Native Windows build and default test suite passed: **127 passed, 0 failed,
 3 opt-in live tests skipped**. Separate live scripts exercise the real production
@@ -80,6 +83,24 @@ scoped check. Do not claim an OOM or gateway failure without further evidence.
 
 Keep the default pool at 5. Ten passed this short workload; twenty is not a
 supported operating claim. Forty remains only a synthetic scheduler test.
+
+### Server capacity (2026-09-27) — supersedes the local conclusions above
+
+Rerun on the USTC GPU server (`/data3/jianf/...`, 2 TB RAM, Node 22.23 + claude 2.1.278)
+via the phase6 harness, with the local Vision Bridge key pool expanded 3 → 5 upstream keys
+so the bridge's effective concurrency reached its global ceiling (48 in-flight / 72 RPM):
+
+| Actual concurrent slots | Completed | Failed | Peak concurrent | Batch wall time | Verdict |
+|---|---:|---:|---:|---:|---|
+| 20 | 20 | 0 | 20 | — | PASS |
+| 40 | 40 | 0 | 40 | 69 s | PASS |
+
+Evidence: `.runtime-experiments/capacity-1790444243562/result.json` (20-way) and
+`.runtime-experiments/capacity-1790448174742/result.json` (40-way; first 40-way attempt on 3
+keys failed 28/40 with warm-up `startTurnTimeoutMs` 120 s timeouts — pool depth, not host
+resources). So the earlier "20/40 not supported" / "40 only synthetic" statements are **host-held
+limits of the 16 GB laptop**, not limits of the code or the gateway pool. The laptop's default
+concurrency stays at 5; the server can operate at 20–40 given pool depth ≥ 5 keys.
 
 ## Review closure
 
