@@ -86,7 +86,7 @@ supported operating claim. Forty remains only a synthetic scheduler test.
 
 ### Server capacity (2026-09-27) — supersedes the local conclusions above
 
-Rerun on the USTC GPU server (`/data3/jianf/...`, 2 TB RAM, Node 22.23 + claude 2.1.278)
+Rerun on the USTC GPU server (`<server-project-dir>`, 2 TB RAM, Node 22.23 + claude 2.1.278)
 via the phase6 harness, with the local Vision Bridge key pool expanded 3 → 5 upstream keys
 so the bridge's effective concurrency reached its global ceiling (48 in-flight / 72 RPM):
 

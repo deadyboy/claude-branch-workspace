@@ -118,7 +118,7 @@
 
 ## §6 硬性本地规则(若有违反,立即纠正)
 
-- 删文件前**必须先问用户**;服务器(210.45.73.166)上文件永不删除。
+- 删文件前**必须先问用户**;服务器（host/user 见本地 config.local.ps1）上文件永不删除。
 - 禁止 `taskkill /IM node.exe` / `powershell.exe` / `electron.exe`;禁止按名批量 Stop-Process;
   清理进程前读 PID/ExecutablePath/CommandLine,确认含项目目录,只结束验证过的精确 PID。
 - 中文路径链接用 `http://127.0.0.1:17321/?f=<encodeURIComponent(F:/…)>`;ASCII 用普通 md 链接。

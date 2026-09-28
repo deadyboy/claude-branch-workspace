@@ -105,8 +105,10 @@ Claude 的强制阅读顺序写在 `START_HERE.md`。
 
 ## 当前状态
 
-已经包含产品实现；当前开发分支为 `codex/phase5-6-integration`。
-准确通过情况与未决项以 `PROJECT_STATE.md` 及 `docs/generated/` 的验收记录为准。
+已经包含产品实现，并已部署一套真实运行实例（本地 UI + 服务器控制面，见
+`SERVER_DEPLOYMENT_HANDOFF.md`；2026-09-27 在服务器上实测 20/40 并发全部
+PASS）。当前开发分支与准确通过情况、未决项以 `PROJECT_STATE.md`、
+`PHASE5_6_HANDOFF.md` 及 `docs/generated/` 的验收记录为准。
 
 Claude Code 开始执行后必须持续更新：
 

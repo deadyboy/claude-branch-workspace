@@ -17,7 +17,7 @@ boot-autostart via Linger) with local-only UI over two loopback SSH tunnels
 Gate 12 preserved. (The auth blocker recorded here was fixed 2026-09-27 — see above.)
 Full detail + diagnostics: `SERVER_DEPLOYMENT_HANDOFF.md`.
 
-## Current integration — 2026-09-18
+## Previous integration — 2026-09-18 (superseded — see "Remote deployment — RESOLVED 2026-09-27" above)
 
 Merged into main `master` via fast-forward (2026-09-18): `b93f225` → `d68055b`
 → `9767e8d`. Phase 5 MCP is complete, functional/code-review gate PASS. Phase 6
@@ -45,12 +45,14 @@ or push has been performed; the original checkout and its changes are preserved.
 ## Historical Phase 4 record
 
 > Claude Code 必须持续更新此文件。它是跨 session/compaction 的简洁事实源。
+> 注意：以下 "Phase/Objective/Next" 标题均为**历史快照**（Phase 4 时点）。
+> 当前状态以上方 "Remote deployment — RESOLVED 2026-09-27" 与 PHASE5_6_HANDOFF.md 为准。
 
-## Current Phase
+### Phase 4 at that time
 
 Phase 4 — COMPLETE, Gate PASS (independent review FAIL→PASS, reviewer APPROVE — `docs/generated/PHASE4_REVIEW.md`). S1–S8 all DONE/GREEN: domain 32/32, event-protocol 13/13, runtime 9+2 live-skip, control-plane 29+1 live-skip, Playwright E2E golden path PASS. Implementation record: `PHASE4_HANDOFF.md`. Next: Phase 5 (MCP control surface).
 
-## Current Objective
+### Objective at that time
 
 Phase 4: UI — conversation tree, current-branch chat, fork-from-turn action, branch breadcrumb/rename, agent monitor, event timeline, permission/attention state, restart/reconnect UX (backlog P4, deferred batching policy lands here).
 
@@ -97,7 +99,8 @@ Phase 3 Gate — PASS (live, real gateway; committed after independent review FA
 - Live-discovery: 300s turn timeout under parallel gateway load (this session + reviewer) could fire mid-turn; raised `turnTimeoutMs` default to 600s + separate `startTurnTimeoutMs` (120s warm-up), threaded through `runTurn`/`spawnOnce`.
 - Record: `docs/generated/PHASE3_REVIEW.md`.
 
-## Next Actions
+# This is a historical snapshot.
+## Next actions recorded at that time (2026-09-18 snapshot; historical)
 
 1. **Phase 4 COMPLETE — Gate PASS** (independent review FAIL→PASS first pass 2026-09-17; **second-pass review 2026-09-18 → 3 MAJORs fixed & re-approved**; record `docs/generated/PHASE4_REVIEW.md`). All S1–S8 done & green (re-verified 2026-09-18): domain 32/32, event-protocol 14/14, runtime 9+2 skip, control-plane 30+1 skip, Playwright E2E golden path PASS.
 2. **Phase 5 (NEXT per backlog P5): Agent Control MCP surface** — create_branch_from_node / send_message / list_branches / get_branch_status / interrupt_branch / archive_branch / query_execution_status / Main-agent integration test.
