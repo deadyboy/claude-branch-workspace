@@ -98,8 +98,11 @@ export function ChatPane() {
         <span>Chat — {branch.displayName ?? branch.id} <span className="tree-id">[{short}]</span></span>
         {busy ? <span className="badge busy">running</span> : <span className="badge subtle">idle</span>}
         <div className="hd-actions">
-          <button onClick={() => { setForkNodeId(null); setShowFork((value) => !value); }} disabled={items.length === 0} title="Choose any completed turn to fork">
-            Fork from history
+          {/* Distinct wording is mandated (S0 §2.3.4): this creates a NEW
+              branch from a past turn, whereas the composer below APPENDS to the
+              current branch. The two must never read as the same action. */}
+          <button onClick={() => { setForkNodeId(null); setShowFork((value) => !value); }} disabled={items.length === 0} title="Create a new branch from any completed turn">
+            Branch from a past turn
           </button>
           <button onClick={interrupt} disabled={!busy || interrupting} className="danger" title="Interrupt the active turn only">
             {interrupting ? "Interrupting…" : "Interrupt"}
@@ -122,7 +125,7 @@ export function ChatPane() {
       <div className="composer">
         <textarea
           value={composer}
-          placeholder="Send a message to this branch…"
+          placeholder="Continue this branch…"
           onChange={(e) => setComposer(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) send();
@@ -130,9 +133,11 @@ export function ChatPane() {
           disabled={busy}
         />
         <div className="composer-row">
-          <span className="hint">{busy ? "Branch running — disabled" : "Ctrl+Enter to send"}</span>
+          <span className="hint">
+            {busy ? "Branch running — disabled" : "Ctrl+Enter to send · continues THIS branch"}
+          </span>
           <button onClick={send} disabled={!composer.trim() || sending || busy}>
-            {sending ? "Sending…" : "Send"}
+            {sending ? "Sending…" : "Continue branch"}
           </button>
         </div>
       </div>
