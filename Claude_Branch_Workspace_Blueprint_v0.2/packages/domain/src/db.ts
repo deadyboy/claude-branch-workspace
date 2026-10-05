@@ -189,9 +189,12 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
     // (see Repository.setBaseRef's guarded UPDATE).
     version: 4,
     apply(db) {
-      db.exec(`
-        ALTER TABLE branches ADD COLUMN base_ref TEXT;
-      `);
+      // Re-apply-safe: `migrate()` may replay this version to repair a DB whose
+      // ledger row is missing (see the ledger note below). SQLite has no
+      // ADD COLUMN IF NOT EXISTS, so the column is checked first.
+      const hasBaseRef = (db.prepare("PRAGMA table_info(branches)").all() as { name: string }[])
+        .some((c) => c.name === "base_ref");
+      if (!hasBaseRef) db.exec("ALTER TABLE branches ADD COLUMN base_ref TEXT;");
     },
   },
   {
@@ -206,8 +209,11 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
     // No other column deviates from the frozen shape.
     version: 5,
     apply(db) {
+      // Re-apply-safe (IF NOT EXISTS): `migrate()` may replay this version to
+      // repair a DB whose ledger row is missing, and a replay must not collide
+      // with tables an earlier partial run already created.
       db.exec(`
-        CREATE TABLE tasks (
+        CREATE TABLE IF NOT EXISTS tasks (
           id           TEXT PRIMARY KEY,
           project_id   TEXT NOT NULL,
           branch_id    TEXT,
@@ -222,7 +228,7 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
         CREATE INDEX IF NOT EXISTS idx_tasks_branch ON tasks(branch_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
 
-        CREATE TABLE task_attempts (
+        CREATE TABLE IF NOT EXISTS task_attempts (
           id           TEXT PRIMARY KEY,
           task_id      TEXT NOT NULL,
           branch_id    TEXT,
@@ -236,7 +242,7 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
         );
         CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id);
 
-        CREATE TABLE artifacts (
+        CREATE TABLE IF NOT EXISTS artifacts (
           id               TEXT PRIMARY KEY,
           project_id       TEXT NOT NULL,
           origin_branch_id TEXT,
@@ -263,22 +269,75 @@ export function openDb(path: string | null): Db {
 }
 
 export function migrate(db: Db): void {
-  const current = db.pragma("user_version", { simple: true }) as number;
-  // Apply in VERSION order, not array order. Two independent writers append to
-  // this array (S4 tasks=5, S1 base_ref=4); a naive left-to-right pass would
-  // run 5 before 4 and then leave user_version=4, so the next open would RE-RUN
-  // 5 (CREATE TABLE → "already exists") and brick the DB. Sorting + adopting the
-  // true max keeps every version applied exactly once regardless of append order.
   const ordered = [...MIGRATIONS].sort((a, b) => a.version - b.version);
-  let applied = current;
+  const current = db.pragma("user_version", { simple: true }) as number;
+
+  // A per-version ledger, because `user_version` is a single scalar and cannot
+  // express a GAP. With only the scalar, a database that somehow reached v5
+  // without v4 would be treated as fully migrated and v4 would be skipped
+  // FOREVER — silently missing a column with no error anywhere. (Observed in
+  // review: a v5-without-v4 DB keeps `user_version = 5` and never gains
+  // `branches.base_ref`.) The ledger records exactly which versions ran, so a
+  // gap is repaired on the next open instead of becoming permanent.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version    INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+  `);
+
+  const recorded = new Set<number>(
+    (db.prepare("SELECT version FROM schema_migrations").all() as { version: number }[]).map((r) => r.version)
+  );
+
+  // Backward compatibility: databases created before the ledger existed are
+  // reconstructed from `user_version`. That is a best-effort assumption — it
+  // trusts that versions 1..current really were applied — so migrations whose
+  // objects can be checked are ALSO verified below.
+  if (recorded.size === 0 && current > 0) {
+    db.transaction(() => {
+      const stmt = db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)");
+      for (let v = 1; v <= current; v++) stmt.run(v, new Date().toISOString());
+    })();
+    for (let v = 1; v <= current; v++) recorded.add(v);
+  }
+
+  // Objects each migration is responsible for. Used to detect — and repair — a
+  // version that the ledger believes ran but whose effect is actually absent.
   for (const m of ordered) {
-    if (m.version > current) {
+    if (!recorded.has(m.version) || !migrationEffectPresent(db, m.version)) {
       db.transaction(() => {
         m.apply(db);
-        db.pragma(`user_version = ${m.version}`);
+        db.prepare("INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+          .run(m.version, new Date().toISOString());
       })();
-      applied = Math.max(applied, m.version);
+      recorded.add(m.version);
     }
   }
-  if (applied !== current) db.pragma(`user_version = ${applied}`);
+
+  const maxVersion = ordered.length ? ordered[ordered.length - 1].version : 0;
+  if (maxVersion > current) db.pragma(`user_version = ${maxVersion}`);
+}
+
+/**
+ * Whether a migration's effect is actually visible in the schema. Migrations
+ * without a registered check are trusted once recorded. This is the guard that
+ * turns a silently-skipped migration into a self-healing one.
+ */
+function migrationEffectPresent(db: Db, version: number): boolean {
+  const hasColumn = (table: string, column: string): boolean =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
+  const hasTable = (table: string): boolean =>
+    Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(table));
+
+  switch (version) {
+    case 4:
+      // S3/E4a: branches.base_ref (see the v4 note above).
+      return hasColumn("branches", "base_ref");
+    case 5:
+      // S4: the three task tables.
+      return hasTable("tasks") && hasTable("task_attempts") && hasTable("artifacts");
+    default:
+      return true;
+  }
 }

@@ -4,6 +4,7 @@
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../context.js";
 import { reconcileOnBoot } from "../reconcile.js";
+import { computeBranchChanges } from "../branch-changes.js";
 
 export function registerRuntime(app: FastifyInstance, ctx: AppContext): void {
   app.get("/api/runtime/capabilities", async () => {
@@ -38,6 +39,18 @@ export function registerRuntime(app: FastifyInstance, ctx: AppContext): void {
     const { id } = req.params as { id: string };
     if (!ctx.svc.getBranch(id)) return reply.code(404).send({ error: "branch not found" });
     return ctx.workspaceManager.status(id);
+  });
+  // S3 / E4a (docs/14 §4.2): read-only review of what a branch's work changed,
+  // relative to its pre-work baseline. Returns committed + uncommitted +
+  // untracked; never 500s for a non-Git / unbound workspace (honest empties).
+  app.get("/api/branches/:id/changes", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!ctx.svc.getBranch(id)) return reply.code(404).send({ error: "branch not found" });
+    try {
+      return await computeBranchChanges(ctx.svc, id);
+    } catch {
+      return reply.code(500).send({ error: "could not read branch changes" });
+    }
   });
   app.post("/api/branches/:id/workspace/cleanup", async (req, reply) => {
     const { id } = req.params as { id: string };
