@@ -13,6 +13,7 @@ import { Timeline } from "./components/Timeline";
 import { ProjectHub } from "./components/ProjectHub";
 import { ConversationGraphView, BranchBreadcrumb } from "./components/ConversationGraphView";
 import { ChangesPanel } from "./components/ChangesPanel";
+import { TeamView } from "./components/TeamView";
 
 const PENDING_REFRESH_FAST_INTERVAL_MS = 1_500;
 const PENDING_REFRESH_SLOW_INTERVAL_MS = 5_000;
@@ -25,7 +26,7 @@ export function App() {
   const st = useStore();
   const [hubOpen, setHubOpen] = useState(false);
   // Conversation | Graph | Project are the three views from the plan (S0 §3.2).
-  const [view, setView] = useState<"conversation" | "graph" | "results">("conversation");
+  const [view, setView] = useState<"conversation" | "graph" | "results" | "team">("conversation");
   const streamRef = useRef<WsStream | null>(null);
   const refreshTokenRef = useRef(0);
   const refreshAllTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -391,6 +392,15 @@ export function App() {
           >
             Results
           </button>
+          <button
+            role="tab"
+            aria-selected={view === "team"}
+            className={view === "team" ? "active" : ""}
+            onClick={() => setView("team")}
+            title="Dispatch work and watch it run"
+          >
+            Team
+          </button>
         </div>
       </header>
       <BranchBreadcrumb branch={st.branches.find((b) => b.id === st.activeBranchId)} />
@@ -403,6 +413,8 @@ export function App() {
           </>
         ) : view === "graph" ? (
           <ConversationGraphView />
+        ) : view === "team" ? (
+          <TeamView />
         ) : (
           <div className="pane results">
             {st.activeBranchId ? (

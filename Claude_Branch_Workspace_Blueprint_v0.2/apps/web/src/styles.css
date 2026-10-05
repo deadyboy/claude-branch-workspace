@@ -390,3 +390,36 @@ input[type="text"], textarea {
   padding: 8px; font-size: 11px; overflow: auto; max-height: 320px; margin: 0;
   white-space: pre;
 }
+
+/* ---- Team view (S4 / E5): durable tasks vs transient runs, kept visually
+   distinct so they are never mistaken for one another (constitution §1). ---- */
+.pane.team { overflow: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+.team-hd { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.team-hd button { margin-left: auto; }
+.team-form { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.team-form input {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 4px; padding: 6px 8px; font-size: 12px;
+}
+.team-note { color: var(--muted); font-size: 11px; margin: 0; }
+.team-list { display: flex; flex-direction: column; gap: 6px; }
+.task-card { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; background: var(--panel2); }
+.task-hd { display: flex; align-items: center; gap: 8px; }
+.task-title { background: transparent; border: none; padding: 0; font-weight: 600; color: var(--text); text-align: left; }
+.task-title:hover { color: var(--accent); }
+.task-meta { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 11px; }
+.task-meta .muted { color: var(--muted); }
+.link { background: transparent; border: none; padding: 0; color: var(--accent); font-size: 11px; }
+.task-interrupt, .task-retry { font-size: 11px; }
+
+/* Attempts: a retry ADDS a row and never replaces one (E5). */
+.task-attempts { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 6px; }
+.task-attempts-hd { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.attempt-row { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }
+.attempt-error { color: var(--err); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.attempt-ref { color: var(--muted); }
+
+/* Execution tree lives in its OWN section — a different object class. */
+.team-runs { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
+.team-runs-hd { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.run-line { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }

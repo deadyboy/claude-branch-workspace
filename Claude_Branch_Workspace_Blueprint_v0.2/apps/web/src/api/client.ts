@@ -15,6 +15,9 @@ import type {
   WorkspaceMode,
   WorkspaceStatus,
   BranchChanges,
+  Task,
+  TaskDetail,
+  TaskAttempt,
 } from "../types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -184,6 +187,26 @@ export const api = {
     req<AttentionCardWire>(`/api/attention/${id}/respond`, {
       method: "POST",
       body: JSON.stringify({ answer }),
+    }),
+
+  // ---- tasks (S4 / E5) ----
+  listTasks: (projectId: string) => req<Task[]>(`/api/projects/${projectId}/tasks`),
+  getTask: (id: string) => req<TaskDetail>(`/api/tasks/${id}`),
+  createTask: (projectId: string, title: string, instructions: string, branchId?: string) =>
+    req<Task>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ projectId, title, instructions, ...(branchId ? { branchId } : {}) }),
+    }),
+  startTaskAttempt: (taskId: string) =>
+    req<TaskAttempt>(`/api/tasks/${taskId}/attempts`, { method: "POST", body: JSON.stringify({}) }),
+  completeTaskAttempt: (
+    taskId: string,
+    attemptId: string,
+    body: { status: "completed" | "failed" | "cancelled"; resultRef?: string; error?: string }
+  ) =>
+    req<TaskAttempt>(`/api/tasks/${taskId}/attempts/${attemptId}/complete`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 
   // ---- events (gate 8, REST catch-up) ----

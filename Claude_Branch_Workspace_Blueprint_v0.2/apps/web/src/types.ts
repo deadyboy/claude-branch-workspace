@@ -132,6 +132,39 @@ export interface EventFrame {
   payload: unknown;
 }
 
+// S4 / E5: durable units of work. A Task persists and may be attempted several
+// times; a TaskAttempt is ONE try. Retries never overwrite an earlier attempt.
+export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+
+export interface Task {
+  id: string;
+  projectId: string;
+  branchId: string | null;
+  title: string;
+  instructions: string;
+  role: string | null;
+  status: TaskStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskAttempt {
+  id: string;
+  taskId: string;
+  branchId: string | null;
+  nodeId: string | null;
+  agentRunId: string | null;
+  status: TaskStatus;
+  resultRef: string | null;
+  error: string | null;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+export interface TaskDetail extends Task {
+  attempts: TaskAttempt[];
+}
+
 // S3 / E4a: the read-only result review for a branch's work.
 export type ChangeStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";
 
