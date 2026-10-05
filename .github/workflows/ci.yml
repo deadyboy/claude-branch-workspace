@@ -13,10 +13,6 @@ concurrency:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: Claude_Branch_Workspace_Blueprint_v0.2
-
 jobs:
   build-test:
     name: build + test (node ${{ matrix.node }})
@@ -36,7 +32,7 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: pnpm
-          cache-dependency-path: Claude_Branch_Workspace_Blueprint_v0.2/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install deps (frozen lockfile)
         run: pnpm install --frozen-lockfile
@@ -61,7 +57,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          cache-dependency-path: Claude_Branch_Workspace_Blueprint_v0.2/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install deps (frozen lockfile)
         run: pnpm install --frozen-lockfile
@@ -72,7 +68,7 @@ jobs:
       # Playwright config uses channel:"chrome" (system Chrome) locally; on CI
       # install both the bundled chromium and the chrome channel plus OS deps.
       - name: Install Playwright browsers
-        working-directory: Claude_Branch_Workspace_Blueprint_v0.2/apps/web
+        working-directory: apps/web
         run: npx playwright install --with-deps chromium chrome
 
       - name: E2E

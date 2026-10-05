@@ -1,5 +1,11 @@
 # IMPLEMENTATION BACKLOG
 
+## P2 — Repository packaging
+
+- [x] Lift project into repository root; merge ignore rules and script directories.
+- [x] Update CI and documentation paths; preserve tunnel scripts.
+- [ ] DEFERRED: maintainer selects/confirms LICENSE; no license inferred.
+
 状态枚举：TODO / IN_PROGRESS / BLOCKED / DONE / DEFERRED
 
 ## P0 — Phase 0 (DONE unless noted)

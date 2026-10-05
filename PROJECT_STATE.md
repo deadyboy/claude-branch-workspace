@@ -1,5 +1,14 @@
 # PROJECT STATE
 
+## P2 repository layout — 2026-10-05
+
+Project files now live at the Git root. CI runs there; tunnel scripts retain their
+original location and ignored local config. Workspace, Playwright and live scripts
+keep their relative layout. See README for existing deployment/data migration.
+LICENSE remains DEFERRED: no established license was found in tracked files,
+package metadata or license-file history; maintainer decision required.
+Validation details: `docs/generated/REPO_ROOT_LIFT_VALIDATION.md`.
+
 ## Remote deployment — RESOLVED 2026-09-27 (see SERVER_DEPLOYMENT_HANDOFF.md)
 
 Auth blocker FIXED (server settings token set to the real desktop credential + control-plane

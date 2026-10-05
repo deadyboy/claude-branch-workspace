@@ -23,7 +23,7 @@
   - `b93f225` = Phase 4 S8 docs(5 个 docs)
 - Hermetic 全绿(2026-09-18 复验):domain **32/32**, event-protocol **14/14**, runtime **9+2 skip**, control-plane **30+1 skip**, E2E **PASS**。
 - 独立 review FAIL→PASS 两轮,记录 `docs/generated/PHASE4_REVIEW.md`(第二轮 +3 个 MAJOR 修复均落实并复验)。
-- 主 checkout `F:\claudetreespace\Claude_Branch_Workspace_Blueprint_v0.2` 已 port 过 Phase 4 主体,但**二次审查修复(redact/session-manager/index/busy-guard/5 docs)仍在分支上,main 未同步**。
+- 主 checkout `F:\claudetreespace` 已 port 过 Phase 4 主体,但**二次审查修复(redact/session-manager/index/busy-guard/5 docs)仍在分支上,main 未同步**。
 - 技术栈:pnpm monorepo,`packages/{domain,event-protocol,runtime}` 纯 TS(tsc→dist,node:test .mjs 打 dist 跑);
   `apps/control-plane` = Fastify server(`buildApp` 工厂 + routes + `ws.ts`),`apps/web` = Vite+React。
 - 现有 REST 路由(全部 loopback-only,`127.0.0.1:15723`):
