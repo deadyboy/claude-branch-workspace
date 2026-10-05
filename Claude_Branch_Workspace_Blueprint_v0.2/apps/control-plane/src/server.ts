@@ -17,6 +17,7 @@ import type { AppContext } from "./context.js";
 import { DomainError } from "@cbw/domain";
 import { CapacityUnavailable } from "./turn-scheduler.js";
 import { registerProjects } from "./routes/projects.js";
+import { registerHost } from "./routes/host.js";
 import { registerBranches } from "./routes/branches.js";
 import { registerConversation } from "./routes/conversation.js";
 import { registerNodes } from "./routes/nodes.js";
@@ -84,6 +85,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<import("fastify")
 
   // ROUTES FIRST.
   registerProjects(app, ctx);
+  registerHost(app, ctx);
   registerBranches(app, ctx);
   registerConversation(app, ctx);
   registerNodes(app, ctx);

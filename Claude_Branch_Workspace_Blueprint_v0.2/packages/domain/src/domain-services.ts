@@ -78,6 +78,23 @@ export class DomainService {
     return this.repo.listProjects();
   }
 
+  /**
+   * Update a project's mutable fields (name / rootPath), preserving its
+   * immutable identity (id, createdAt). Only the fields the caller supplies are
+   * changed; the others keep their stored values. Returns the refreshed row.
+   */
+  updateProject(id: string, fields: { name?: string; rootPath?: string | null }): Project {
+    const existing = this.repo.getProject(id);
+    if (!existing) throw new DomainError(`project ${id} not found`);
+    if (fields.name !== undefined && !fields.name) throw new DomainError("project name must not be empty");
+    this.repo.updateProject(id, {
+      name: fields.name,
+      rootPath: fields.rootPath,
+      updatedAt: this.now(),
+    });
+    return this.repo.getProject(id) as Project;
+  }
+
   // ---- branches ----
   private requireOpen(b: Branch): void {
     if (b.status !== "active") {

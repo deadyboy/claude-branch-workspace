@@ -10,6 +10,21 @@ export interface Project {
   updatedAt: string;
 }
 
+// S1 project entry capability probe (docs/14 §4.1). Reflects what the project's
+// rootPath supports RIGHT NOW: whether an isolated worktree branch can be
+// created, and if not, the human-readable reason. `sharedAvailable` is always
+// true — shared-dir chat never needs Git.
+export interface ProjectCapabilities {
+  rootPath: string | null;
+  exists: boolean;
+  isGit: boolean;
+  dirty: boolean;
+  hasCommits: boolean;
+  worktreeAvailable: boolean;
+  worktreeReason: string | null;
+  sharedAvailable: true;
+}
+
 export type OriginStrategy =
   | "native_head_fork"
   | "native_historical_fork"

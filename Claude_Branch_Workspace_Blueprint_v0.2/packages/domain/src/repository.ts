@@ -66,6 +66,16 @@ export class Repository {
   touchProject(id: string, at: string): void {
     this.db.prepare(`UPDATE projects SET updated_at = ? WHERE id = ?`).run(at, id);
   }
+  /** Update only the fields supplied; the immutable ID and createdAt are untouched. */
+  updateProject(id: string, fields: { name?: string; rootPath?: string | null; updatedAt: string }): void {
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (fields.name !== undefined) { sets.push("name = ?"); args.push(fields.name); }
+    if (fields.rootPath !== undefined) { sets.push("root_path = ?"); args.push(fields.rootPath); }
+    sets.push("updated_at = ?"); args.push(fields.updatedAt);
+    args.push(id);
+    this.db.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+  }
 
   // ---- branches ----
   insertBranch(b: Branch): void {
