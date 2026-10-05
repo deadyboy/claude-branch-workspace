@@ -6,7 +6,7 @@
 ## 启动（原生 Windows PowerShell）
 
 需要 Node.js（本次使用 24.15.0）、pnpm 11.22.0、Git、已配置认证的 Claude Code。
-在本目录执行：
+在仓库根目录（`package.json` 所在目录）执行：
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -116,3 +116,19 @@ Claude Code 开始执行后必须持续更新：
 - `IMPLEMENTATION_BACKLOG.md`
 - `decisions/`
 - `CHANGELOG.md`
+
+## 仓库根目录与升级
+
+项目已提升到 Git 仓库根目录；workspace、构建、测试和启动均从根目录执行。
+`apps/`、`packages/` 的相对布局不变；`scripts/cbw-tunnel/` 保留原位置与本地配置规则。
+已有部署升级前，请停止控制面并备份数据库；将旧项目目录中未跟踪的 `data/`
+（含 SQLite WAL/SHM 文件）、运行配置和所需实验记录迁移到新项目根，或用 `CBW_DB`
+继续指向原数据库。同步更新 systemd 的 `WorkingDirectory`/`ExecStart`、MCP 注册路径
+及其他本地绝对路径后再启动，避免默认路径变化创建空数据库。Git 不迁移这些本地文件。
+数据库中已有项目/分支的 workspace 绝对路径也不会自动改写；保留这些绑定目录
+（包括旧项目目录及 worktree），或另行确认路径与原生 session 的迁移方案后再清理。
+
+## 许可证
+
+当前仓库及包元数据未声明既定许可证。LICENSE 待维护者明确选择后补齐；
+本次目录迁移不引入许可证或更改授权条款。

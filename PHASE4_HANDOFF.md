@@ -6,7 +6,7 @@
 
 ## 0. 一句话
 
-用户在实现 **Claude Branch Workspace**(根目录 `F:\claudetreespace\Claude_Branch_Workspace_Blueprint_v0.2`),
+用户在实现 **Claude Branch Workspace**(根目录 `F:\claudetreespace`),
 Phase 4 = 三栏 Web UI(React)+ 控制面 HTTP/WS 服务(Fastify)。有 **15 个硬性 gate**(全部必须实现,不是只规划)。
 原发起指令:执行(execute)而非只规划,自主连续推进,每个重要 Phase 结束前必须有一次独立 reviewer(宪法§6)。
 Phase 4 计划已批准、已由独立架构评审(B1–B4/R1–R6/S1–S2 全部解决)。你现在的任务:**把 Phase 4 做完并过 15 个 gate,先评审后收尾**。

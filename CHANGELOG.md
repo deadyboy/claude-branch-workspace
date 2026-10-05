@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-05 — Repository root lift
+
+- Lift application, workspace, README and project instructions to the Git root.
+- Merge script directories and ignore rules; retain tunnel files unchanged.
+- Update CI lockfile/browser paths and deployment docs; relative workspace,
+  Playwright and live-script paths remain valid without code changes.
+- Leave LICENSE pending an explicit maintainer decision.
+- Validation: `docs/generated/REPO_ROOT_LIFT_VALIDATION.md`.
+
 ## Consolidation — 2026-09-18
 
 - Rescued uncommitted Codex Phase 5/6 work into `codex/phase5-6-integration` as `9767e8d`,

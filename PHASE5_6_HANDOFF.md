@@ -2,7 +2,7 @@
 
 ## Delivery location
 
-Implementation: `F:\claudetreespace-integration\Claude_Branch_Workspace_Blueprint_v0.2`.
+Implementation: `F:\claudetreespace-integration`.
 Branch: `codex/phase5-6-integration`, based on `d68055b` from the prior Phase 4 branch.
 Rescue-committed as `9767e8d` (2026-09-18) after the work was found uncommitted,
 then fast-forwarded into main `master` as part of consolidation (no merge, push or

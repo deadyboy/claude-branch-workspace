@@ -1,4 +1,4 @@
-Claude_Branch_Workspace_Blueprint_v0.2
+claude-branch-workspace
 ├── .claude
 │   └── skills
 │       ├── bootstrap-project
@@ -7,6 +7,13 @@ Claude_Branch_Workspace_Blueprint_v0.2
 │       │   └── SKILL.md
 │       └── runtime-probe
 │           └── SKILL.md
+├── .github/workflows/ci.yml
+├── apps/ (control-plane, mcp-server, web)
+├── packages/ (domain, event-protocol, runtime)
+├── scripts/ (probes, live checks, cbw-tunnel/)
+├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
 ├── decisions
 │   ├── ADR-001-control-plane-not-runtime.md
 │   ├── ADR-002-two-tree-model.md

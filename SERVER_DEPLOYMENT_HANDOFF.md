@@ -46,7 +46,7 @@ upstream API keys (see Gotchas).
 ### Server — control plane as a systemd user service
 - Unit: `~/.config/systemd/user/cbw-control-plane.service` (enabled, Restart=always;
   user has `Linger=yes`, so it starts at boot WITHOUT login).
-- Project: `<server-project-dir>/Claude_Branch_Workspace_Blueprint_v0.2`
+- Project: `<server-project-dir>`
 - conda env: `<server-conda-env>/cbw22` (Node 22.23 + pnpm 11.27 + claude 2.1.278)
 - DB: `<proj>/data/cbw.db`  |  Unit env: CBW_BASE_URL=127.0.0.1:15722, CBW_PORT=15723
 - Checks: `systemctl --user status cbw-control-plane` / `journalctl --user -u cbw-control-plane`
