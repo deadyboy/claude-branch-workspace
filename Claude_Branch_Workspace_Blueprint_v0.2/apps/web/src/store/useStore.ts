@@ -7,6 +7,8 @@ import { api } from "../api/client";
 import type {
   Branch,
   Project,
+  Host,
+  ProjectCapabilities,
   ConversationNode,
   EffectiveConversationItem,
   AgentRun,
@@ -43,11 +45,16 @@ export interface TimelineEntry {
 }
 
 interface CbwState {
+  // ---- execution host (S0 §3) ----
+  host: Host | null;
   // ---- projects / branches ----
   projects: Project[];
   branches: Branch[];
   activeProjectId: string | null;
   activeBranchId: string | null;
+  // Capabilities per project id; the ProjectHub reads these to decide which
+  // workspace modes it may offer and to show the real blocking reason.
+  capabilitiesByProject: Record<string, ProjectCapabilities>;
   workspaceByBranch: Record<string, WorkspaceStatus>;
   // node status per branch (for busy flag + badges)
   nodesByBranch: Record<string, ConversationNode[]>;
@@ -69,10 +76,15 @@ interface CbwState {
   socketStatus: "connecting" | "open" | "closed";
 
   // ---- actions ----
+  setHost: (h: Host | null) => void;
   setProjects: (p: Project[]) => void;
   setActiveProject: (id: string | null) => void;
+  setCapabilities: (projectId: string, caps: ProjectCapabilities) => void;
   setBranches: (b: Branch[]) => void;
-  setActiveBranch: (id: string) => void;
+  setActiveBranch: (id: string | null) => void;
+  // Clear every per-project slice. Switching projects MUST NOT let one
+  // project's branches, chats, runs, or events show under another (E1).
+  resetProjectScopedState: () => void;
   setWorkspace: (branchId: string, workspace: WorkspaceStatus) => void;
   setNodes: (branchId: string, nodes: ConversationNode[]) => void;
   setConversation: (branchId: string, items: EffectiveConversationItem[]) => void;
@@ -97,10 +109,12 @@ const statusSuggestsPermission = (t: TimelineEntry): boolean =>
   t.status === "attention.required";
 
 export const useStore = create<CbwState>((set, get) => ({
+  host: null,
   projects: [],
   branches: [],
   activeProjectId: null,
   activeBranchId: null,
+  capabilitiesByProject: {},
   workspaceByBranch: {},
   nodesByBranch: {},
   conversationByBranch: {},
@@ -114,10 +128,26 @@ export const useStore = create<CbwState>((set, get) => ({
   attention: [],
   socketStatus: "closed",
 
+  setHost: (host) => set({ host }),
   setProjects: (projects) => set({ projects }),
   setActiveProject: (activeProjectId) => set({ activeProjectId }),
+  setCapabilities: (projectId, caps) =>
+    set((s) => ({ capabilitiesByProject: { ...s.capabilitiesByProject, [projectId]: caps } })),
   setBranches: (branches) => set({ branches }),
   setActiveBranch: (activeBranchId) => set({ activeBranchId }),
+  resetProjectScopedState: () =>
+    set({
+      branches: [],
+      activeBranchId: null,
+      workspaceByBranch: {},
+      nodesByBranch: {},
+      conversationByBranch: {},
+      agentRunsByBranch: {},
+      toolCards: [],
+      timeline: [],
+      latestSeqRel: 0,
+      attention: [],
+    }),
   setWorkspace: (branchId, workspace) =>
     set((s) => ({ workspaceByBranch: { ...s.workspaceByBranch, [branchId]: workspace } })),
   setNodes: (branchId, nodes) =>

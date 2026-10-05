@@ -181,3 +181,163 @@ input[type="text"], textarea {
 .attn-detail { margin-top: 4px; color: var(--muted); white-space: pre-wrap; }
 .attn-actions { display: flex; gap: 6px; margin-top: 6px; }
 .attn-answered { color: var(--muted); margin-top: 4px; font-size: 12px; }
+
+/* ---- Project Hub (S1 / E1): project entry, switching, execution-host + mode
+   capability display. Follows the existing dark token set above. ---- */
+.badge.ok { background: rgba(52,199,89,.18); color: var(--ok); }
+.badge.warn { background: rgba(255,204,51,.18); color: var(--warn); }
+
+.host-tag {
+  margin-left: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.project-switch {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 60vw;
+}
+.project-switch .caret { color: var(--muted); }
+.project-switch .project-root { margin-left: 0; }
+
+.hub-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 8vh;
+  z-index: 50;
+}
+.hub {
+  width: min(680px, 92vw);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  box-shadow: 0 12px 40px rgba(0,0,0,.5);
+}
+.hub-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+.hub-host {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.hub-host-meta { color: var(--muted); font-size: 11px; }
+.hub-note { color: var(--muted); font-size: 11px; margin: 8px 0 12px; }
+.hub-error {
+  background: rgba(255,82,82,.12);
+  color: var(--err);
+  border: 1px solid rgba(255,82,82,.35);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  word-break: break-word;
+}
+.hub-list { display: flex; flex-direction: column; gap: 4px; max-height: 46vh; overflow: auto; }
+.hub-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+}
+.hub-row.active { border-color: var(--accent); background: rgba(79,140,255,.08); }
+.hub-main {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-align: left;
+  background: transparent;
+  border: none;
+  padding: 4px 0;
+}
+.hub-name { font-weight: 600; }
+.hub-root {
+  color: var(--muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 40vw;
+}
+.hub-add { margin-top: 12px; }
+.hub-form { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.hub-form label { display: flex; flex-direction: column; gap: 4px; }
+.hub-form label > span { color: var(--muted); font-size: 11px; }
+.hub-form input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.hub-form-actions { display: flex; gap: 8px; margin-top: 4px; }
+
+/* ---- Conversation Graph (S2 / E2). Dependency-free SVG on top of the pure
+   projection; edge KIND is encoded by colour AND dash so a fork edge can never
+   be misread as a within-branch sequence edge (S0 §2.2). ---- */
+.graph-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.graph-hd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.graph-legend { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; }
+.graph-legend .lg { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--muted); margin-left: 8px; }
+.graph-legend .lg-fork { border-top-color: var(--accent); border-top-style: solid; }
+.graph-legend .lg-parent { border-top-color: var(--muted); border-top-style: dashed; }
+.graph-legend .lg-turn { border-top-color: var(--ok); border-top-style: dotted; }
+.graph-scroll { overflow: auto; flex: 1; background:
+  linear-gradient(var(--panel2) 1px, transparent 1px) 0 0 / 100% 40px,
+  var(--bg);
+}
+.edge { stroke-width: 1.5; opacity: .85; }
+.edge-fork { stroke: var(--accent); stroke-dasharray: none; stroke-width: 2; }
+.edge-parent { stroke: var(--muted); stroke-dasharray: 5 4; }
+.edge-turnSeq { stroke: var(--ok); stroke-dasharray: 2 3; }
+.edge-owns { stroke: var(--border); stroke-width: 1; }
+.edge-spawned { stroke: var(--attn); stroke-dasharray: 3 3; }
+.gnode { cursor: pointer; }
+.gnode.selected rect { filter: brightness(1.3); }
+.gnode-label { fill: var(--text); font-size: 11px; pointer-events: none; }
+.gnode-branch .gnode-label { font-weight: 600; }
+.graph-inspect {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.graph-inspect-meta { color: var(--muted); font-size: 11px; }
+.breadcrumb { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; font-size: 11px; padding: 4px 8px; }
+.crumb { display: inline-flex; align-items: center; gap: 4px; }
+.crumb-sep { color: var(--muted); margin: 0 2px; }
+.crumb-current { color: var(--text); font-weight: 600; }
+.crumb-id { color: var(--muted); margin-left: 4px; font-size: 10px; }
+
+.view-tabs { display: inline-flex; gap: 4px; margin-left: 12px; }
+.view-tabs button.active { border-color: var(--accent); color: var(--accent); }

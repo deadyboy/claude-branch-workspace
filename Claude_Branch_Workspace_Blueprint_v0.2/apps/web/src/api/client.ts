@@ -4,6 +4,8 @@
 
 import type {
   Project,
+  Host,
+  ProjectCapabilities,
   Branch,
   EffectiveConversationItem,
   ConversationNode,
@@ -100,6 +102,9 @@ export function normalizeEventFrame(raw: unknown): EventFrame | null {
 }
 
 export const api = {
+  // ---- execution host (S0 §3) ----
+  host: () => req<Host>("/api/host"),
+
   // ---- projects ----
   listProjects: () => req<Project[]>("/api/projects"),
   createProject: (name: string, rootPath?: string) =>
@@ -107,6 +112,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, ...(rootPath ? { rootPath } : {}) }),
     }),
+  updateProject: (id: string, patch: { name?: string; rootPath?: string }) =>
+    req<Project>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  // Workspace modes this project can actually offer, with the real reason when
+  // worktree is unavailable (never a bare disabled control).
+  capabilities: (id: string) => req<ProjectCapabilities>(`/api/projects/${id}/capabilities`),
 
   // ---- branches ----
   listBranches: (projectId: string) => req<Branch[]>(`/api/projects/${projectId}/branches`),

@@ -39,6 +39,31 @@ export interface Project {
   updatedAt?: string;
 }
 
+// Execution host (S0 freeze §3): ONE control-plane instance == ONE host, and
+// project.rootPath is always a path on THAT host. The browser cannot hand a
+// remote host a local directory, so the UI must always show which machine a
+// project will execute on rather than implying the user's own filesystem.
+export interface Host {
+  hostname: string;
+  platform: string;
+  cwd: string;
+  adapters: string[];
+}
+
+// Why a workspace mode is or is not offerable (S0 freeze §4.1). `dirty` alone
+// never makes the project unusable — shared mode always works; it only gates
+// worktree creation, which needs a clean source.
+export interface ProjectCapabilities {
+  rootPath: string | null;
+  exists: boolean;
+  isGit: boolean;
+  dirty: boolean;
+  hasCommits: boolean;
+  worktreeAvailable: boolean;
+  worktreeReason: string | null;
+  sharedAvailable: boolean;
+}
+
 export type ConversationNodeStatus = "pending" | "completed" | "failed" | "cancelled";
 export type TurnStatus = "completed" | "failed" | "cancelled";
 
