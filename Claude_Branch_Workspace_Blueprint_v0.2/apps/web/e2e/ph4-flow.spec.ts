@@ -78,7 +78,7 @@ test("ph4 golden path: boot, multi-turn, fork, no-leak, attention", async ({ pag
   await expect(page.locator(".run-card").first()).toContainText("completed");
 
   // Phase 6 — fork from the first completed historical turn through Chat.
-  await page.getByRole("button", { name: "Fork from history", exact: true }).click();
+  await page.getByRole("button", { name: "Branch from a past turn", exact: true }).click();
   const historyDialog = page.locator(".chat .fork-dialog");
   await expect(historyDialog).toBeVisible();
   await expect(historyDialog.getByLabel("Fork source turn").locator("option")).toHaveCount(2);

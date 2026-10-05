@@ -3,14 +3,18 @@
 //   GET  /api/projects/:id/tasks   → Task[]
 //   GET  /api/tasks/:id            → Task & { attempts: TaskAttempt[] }
 //   PATCH /api/tasks/:id           { title?, instructions?, role?, branchId? } → Task
+//   POST /api/tasks/:id/apply      { preview: true }                 → ApplyPreview
+//   POST /api/tasks/:id/apply      { preview: false, confirmToken }  → ApplyResult
 //
-// NOTE: POST /api/tasks/:id/apply is intentionally NOT implemented here — that
-// is the separate E4b apply unit. A scheduler is likewise NOT implemented here;
-// the durable `queued` status lets a task express "waiting for a slot".
+// The apply endpoints (E4b) live in ../task-apply.ts; this file only validates
+// the body and maps ApplyError to the right status. A scheduler is NOT
+// implemented here; the durable `queued` status lets a task express "waiting for
+// a slot".
 
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../context.js";
 import type { TaskStatus } from "@cbw/domain";
+import { ApplyError, applyTask, computeApplyPreview } from "../task-apply.js";
 
 const TASK_STATUSES: TaskStatus[] = ["queued", "running", "completed", "failed", "cancelled"];
 
@@ -140,5 +144,40 @@ export function registerTasks(app: FastifyInstance, ctx: AppContext): void {
       resultRef: body.resultRef ?? null,
       error: body.error ?? null,
     });
+  });
+
+  // E4b (docs/14 §4.3): preview then apply. `preview:true` is a PURE READ and
+  // never touches the target; `preview:false` requires the confirmToken the
+  // preview returned and refuses (409) when the target or source moved since.
+  app.post("/api/tasks/:id/apply", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as {
+      preview?: unknown;
+      confirmToken?: unknown;
+      targetPath?: unknown;
+    };
+    if (typeof body.preview !== "boolean") {
+      return reply.code(400).send({ error: "preview must be a boolean" });
+    }
+    if (body.targetPath !== undefined && body.targetPath !== null && typeof body.targetPath !== "string") {
+      return reply.code(400).send({ error: "targetPath must be a string" });
+    }
+    const targetPath = (body.targetPath as string | undefined) ?? null;
+
+    try {
+      if (body.preview) {
+        return await computeApplyPreview({ svc }, id, { targetPath });
+      }
+      if (typeof body.confirmToken !== "string" || !body.confirmToken) {
+        return reply.code(400).send({ error: "confirmToken is required to apply" });
+      }
+      const result = await applyTask({ svc }, id, { targetPath, confirmToken: body.confirmToken });
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof ApplyError) {
+        return reply.code(err.code).send({ error: err.message, ...(err.detail ? { detail: err.detail } : {}) });
+      }
+      throw err;
+    }
   });
 }

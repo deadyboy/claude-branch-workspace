@@ -9,7 +9,8 @@
 // Layout is computed from genealogy, never from user intent: dragging a node
 // rearranges only `positions` and can never mutate ancestry (S0 §2.3.2).
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { api } from "../api/client";
 import {
   buildConversationGraph,
   layoutGraph,
@@ -38,6 +39,32 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
   const st = useStore();
   const [selected, setSelected] = useState<string | null>(null);
   const [forkFrom, setForkFrom] = useState<{ branch: Branch; nodeId: string } | null>(null);
+
+  // The store only loads turns for the ACTIVE branch. The graph is a
+  // project-wide view, so without this it would draw branch boxes with no turns
+  // — which is exactly what an E2 check caught. Fetch turns for any branch that
+  // has none loaded yet, then the projection can show real history.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const branch of st.branches) {
+        if (cancelled) return;
+        if (useStore.getState().nodesByBranch[branch.id]) continue;
+        try {
+          const nodes = await api.nodes(branch.id);
+          if (cancelled) return;
+          useStore.getState().setNodes(branch.id, nodes);
+        } catch {
+          // A branch whose nodes cannot be read still renders as a box; the
+          // graph degrades rather than failing.
+          useStore.getState().setNodes(branch.id, []);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [st.branches]);
 
   const graph = useMemo(
     () =>

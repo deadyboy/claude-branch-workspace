@@ -271,6 +271,103 @@ export interface Artifact {
   createdAt: string;
 }
 
+// ---- E4b: applying a branch's result back to a target directory (docs/14 §4.3) ----
+
+// Lifecycle of one apply operation. "applied" and "failed" are terminal; a
+// "failed" operation left the target restored, so it may be retried. "partial"
+// is a mid-apply failure whose rollback could NOT fully restore the target —
+// it must never be reported as success (E4b honesty rule).
+export type ApplyOperationStatus = "applying" | "applied" | "failed" | "partial";
+
+// Durable ledger row for one apply. Keyed by a DETERMINISTIC operationId (a hash
+// of the source + target descriptor), so a repeated click with the same
+// confirmToken is recognised and replayed instead of re-applying (E4b idempotency).
+export interface ApplyOperation {
+  id: string;
+  taskId: UUID;
+  projectId: UUID;
+  branchId: UUID | null;
+  targetPath: string;
+  baseRef: string | null;
+  confirmToken: string;
+  status: ApplyOperationStatus;
+  appliedJson: string; // JSON string[] of paths actually written/deleted
+  pendingJson: string; // JSON string[] of paths NOT applied (failure reporting)
+  targetRestored: boolean; // true when a failed apply rolled the target back
+  backupDir: string | null; // recovery entry: where pre-apply copies live
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// The action one target file receives.
+export type ApplyAction = "write" | "delete";
+
+// What the preview decided for one file: apply it, skip it (already in the
+// wanted state), or stop because it conflicts (E4b "禁止静默覆盖").
+export type ApplyDecision = "apply" | "skip" | "conflict";
+
+export interface ApplyFileSummary {
+  path: string;
+  action: ApplyAction;
+  /** The source change status this file op came from (rename expands to delete+write). */
+  status: ChangeStatus;
+  group: "committed" | "uncommitted" | "untracked";
+  decision: ApplyDecision;
+  /** Human-readable reason, present for skip/conflict. */
+  reason?: string;
+}
+
+export interface ApplyConflict {
+  path: string;
+  reason: string;
+}
+
+// Preview response (docs/14 §4.3). PURE READ — never touches the target.
+export interface ApplyPreview {
+  preview: true;
+  taskId: UUID;
+  projectId: UUID;
+  branchId: UUID | null;
+  // ---- source (where the changes come from) ----
+  sourceWorkspacePath: string | null;
+  sourceWorkspaceMode: WorkspaceMode;
+  baseRef: string | null;
+  sharedWorkspace: boolean;
+  // ---- target (where they would land) ----
+  targetPath: string;
+  targetExists: boolean;
+  targetIsGit: boolean;
+  targetDirty: boolean;
+  // ---- what would happen ----
+  files: ApplyFileSummary[];
+  conflicts: ApplyConflict[];
+  canApply: boolean;
+  /** Set (with a reason) when the preview could not enumerate changes safely. */
+  blocked: string | null;
+  truncated: boolean;
+  // ---- confirmation ----
+  operationId: string;
+  confirmToken: string;
+}
+
+// Apply response (docs/14 §4.3). `replayed` marks an idempotent second click.
+export interface ApplyResult {
+  status: "applied" | "failed" | "partial" | "replayed";
+  operationId: string;
+  taskId: UUID;
+  projectId: UUID;
+  branchId: UUID | null;
+  targetPath: string;
+  baseRef: string | null;
+  applied: string[];
+  pending: string[];
+  targetRestored: boolean;
+  backupDir: string | null;
+  error: string | null;
+  replayed: boolean;
+}
+
 // Branch context snapshot used for reconstruction fork (ADR-006 Option 3).
 export interface BranchContextSnapshot {
   branchId: UUID;

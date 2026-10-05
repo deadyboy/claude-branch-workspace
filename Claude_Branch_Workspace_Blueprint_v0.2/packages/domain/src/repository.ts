@@ -1,6 +1,8 @@
 import type { Db } from "./db.js";
 import type {
   AgentRun,
+  ApplyOperation,
+  ApplyOperationStatus,
   Artifact,
   Branch,
   BranchContextSnapshot,
@@ -44,6 +46,11 @@ const TASK_ATTEMPT_COLS = `id, task_id AS taskId, branch_id AS branchId, node_id
 const ARTIFACT_COLS = `id, project_id AS projectId, origin_branch_id AS originBranchId,
   origin_node_id AS originNodeId, origin_task_id AS originTaskId, kind, path, summary,
   created_at AS createdAt`;
+const APPLY_OP_COLS = `id, task_id AS taskId, project_id AS projectId, branch_id AS branchId,
+  target_path AS targetPath, base_ref AS baseRef, confirm_token AS confirmToken,
+  status, applied_json AS appliedJson, pending_json AS pendingJson,
+  target_restored AS targetRestored, backup_dir AS backupDir, error,
+  created_at AS createdAt, updated_at AS updatedAt`;
 
 // Thin prepared-statement access over the raw tables. No domain rules here;
 // invariants live in DomainService.
@@ -557,6 +564,63 @@ export class Repository {
     return this.db
       .prepare(`SELECT ${ARTIFACT_COLS} FROM artifacts WHERE origin_task_id = ? ORDER BY created_at, id`)
       .all(taskId) as Artifact[];
+  }
+
+  // ---- apply operations (E4b, docs/14 §4.3) ----
+
+  insertApplyOperation(o: ApplyOperation): void {
+    this.db
+      .prepare(
+        `INSERT INTO apply_operations (
+           id, task_id, project_id, branch_id, target_path, base_ref, confirm_token,
+           status, applied_json, pending_json, target_restored, backup_dir, error,
+           created_at, updated_at
+         ) VALUES (
+           @id, @taskId, @projectId, @branchId, @targetPath, @baseRef, @confirmToken,
+           @status, @appliedJson, @pendingJson, @targetRestored, @backupDir, @error,
+           @createdAt, @updatedAt
+         )`
+      )
+      .run({ ...o, targetRestored: o.targetRestored ? 1 : 0 });
+  }
+
+  getApplyOperation(id: string): ApplyOperation | null {
+    const row = this.db.prepare(`SELECT ${APPLY_OP_COLS} FROM apply_operations WHERE id = ?`).get(id) as
+      | (Omit<ApplyOperation, "targetRestored"> & { targetRestored: number })
+      | undefined;
+    return row ? { ...row, targetRestored: row.targetRestored === 1 } : null;
+  }
+
+  updateApplyOperation(
+    id: string,
+    fields: {
+      status?: ApplyOperationStatus;
+      appliedJson?: string;
+      pendingJson?: string;
+      targetRestored?: boolean;
+      backupDir?: string | null;
+      error?: string | null;
+      updatedAt: string;
+    }
+  ): void {
+    const sets: string[] = [];
+    const args: unknown[] = [];
+    if (fields.status !== undefined) { sets.push("status = ?"); args.push(fields.status); }
+    if (fields.appliedJson !== undefined) { sets.push("applied_json = ?"); args.push(fields.appliedJson); }
+    if (fields.pendingJson !== undefined) { sets.push("pending_json = ?"); args.push(fields.pendingJson); }
+    if (fields.targetRestored !== undefined) { sets.push("target_restored = ?"); args.push(fields.targetRestored ? 1 : 0); }
+    if (fields.backupDir !== undefined) { sets.push("backup_dir = ?"); args.push(fields.backupDir); }
+    if (fields.error !== undefined) { sets.push("error = ?"); args.push(fields.error); }
+    sets.push("updated_at = ?"); args.push(fields.updatedAt);
+    args.push(id);
+    this.db.prepare(`UPDATE apply_operations SET ${sets.join(", ")} WHERE id = ?`).run(...args);
+  }
+
+  listApplyOperationsByTask(taskId: string): ApplyOperation[] {
+    const rows = this.db
+      .prepare(`SELECT ${APPLY_OP_COLS} FROM apply_operations WHERE task_id = ? ORDER BY created_at DESC, id`)
+      .all(taskId) as (Omit<ApplyOperation, "targetRestored"> & { targetRestored: number })[];
+    return rows.map((r) => ({ ...r, targetRestored: r.targetRestored === 1 }));
   }
 }
 

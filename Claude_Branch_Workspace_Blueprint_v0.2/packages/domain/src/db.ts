@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 
 export type Db = Database.Database;
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 // Versioned migrations, applied in order. Each entry upgrades the DB from
 // version N-1 to N. Idempotent within a transaction per version.
@@ -169,8 +169,13 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
     // creation order so pre-existing rows get stable, ordered cursors.
     version: 3,
     apply(db) {
+      // Re-apply-safe: `migrate()` may replay this version to repair a DB whose
+      // ledger row is missing, and SQLite has no ADD COLUMN IF NOT EXISTS — so
+      // the column is checked first (same guard as v4) before the backfill.
+      const hasSeqRel = (db.prepare("PRAGMA table_info(events)").all() as { name: string }[])
+        .some((c) => c.name === "seq_rel");
+      if (!hasSeqRel) db.exec("ALTER TABLE events ADD COLUMN seq_rel INTEGER NOT NULL DEFAULT 0;");
       db.exec(`
-        ALTER TABLE events ADD COLUMN seq_rel INTEGER NOT NULL DEFAULT 0;
         UPDATE events SET seq_rel = (
           SELECT n FROM (
             SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY received_at, id) AS n
@@ -258,6 +263,38 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
       `);
     },
   },
+  {
+    // E4b (docs/14 §4.3): the apply ledger. One row per apply operation, keyed by
+    // a DETERMINISTIC id (hash of source+target descriptor) so a repeated click
+    // is recognised and idempotently replayed. Records the source baseline
+    // (base_ref), the target path, the confirm token, and — for a mid-apply
+    // failure — exactly which paths landed, which did not, and where the pre-apply
+    // backup lives (the recovery entry). Additive table; no existing column moves.
+    version: 6,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS apply_operations (
+          id              TEXT PRIMARY KEY,
+          task_id         TEXT NOT NULL,
+          project_id      TEXT NOT NULL,
+          branch_id       TEXT,
+          target_path     TEXT NOT NULL,
+          base_ref        TEXT,
+          confirm_token   TEXT NOT NULL,
+          status          TEXT NOT NULL,
+          applied_json    TEXT NOT NULL DEFAULT '[]',
+          pending_json    TEXT NOT NULL DEFAULT '[]',
+          target_restored INTEGER NOT NULL DEFAULT 0,
+          backup_dir      TEXT,
+          error           TEXT,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_apply_ops_task ON apply_operations(task_id);
+        CREATE INDEX IF NOT EXISTS idx_apply_ops_branch ON apply_operations(branch_id);
+      `);
+    },
+  },
 ];
 
 export function openDb(path: string | null): Db {
@@ -337,6 +374,9 @@ function migrationEffectPresent(db: Db, version: number): boolean {
     case 5:
       // S4: the three task tables.
       return hasTable("tasks") && hasTable("task_attempts") && hasTable("artifacts");
+    case 6:
+      // E4b: the apply ledger.
+      return hasTable("apply_operations");
     default:
       return true;
   }

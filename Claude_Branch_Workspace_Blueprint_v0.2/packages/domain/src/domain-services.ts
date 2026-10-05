@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { Repository } from "./repository.js";
 import type {
   AgentRun,
+  ApplyOperation,
+  ApplyOperationStatus,
   Artifact,
   ArtifactKind,
   Branch,
@@ -325,9 +327,13 @@ export class DomainService {
   }
 
   captureBranchContext(branch: Branch, forkNode: ConversationNode): void {
-    const lineage: ConversationNode[] = [];
-    this.collectLineage(forkNode, lineage);
-    lineage.reverse();
+    // Seed the reconstruction snapshot from the FULL ancestor chain, using the
+    // SAME traversal the UI reads (inheritedNodes). The previous implementation
+    // walked only same-branch `parentNodeId` links, so a fork-of-fork (A1 from A)
+    // dropped the whole prefix A inherited from Main: the UI showed 6 inherited
+    // items while the model seed carried 2. Sharing one traversal is what keeps
+    // them from diverging again (E2 "拓扑和有效上下文逐项一致").
+    const lineage = this.inheritedNodes(branch);
 
     const visibleMessages: { role: "user" | "assistant"; content: string }[] = [];
     for (const n of lineage) {
@@ -638,33 +644,14 @@ export class DomainService {
     const branch = this.repo.getBranch(branchId);
     if (!branch) throw new DomainError(`branch ${branchId} not found`);
 
+    // Same traversal as the reconstruction seed (inheritedNodes): the UI and the
+    // model read the same ordered list, so they cannot disagree about what a
+    // branch inherits. Origin is decided per node by which branch owns it.
     const items: EffectiveConversationItem[] = [];
-
-    // Walk ancestors (deepest first), reverse at the end so root->target.
-    const chain: Branch[] = [];
-    const seen = new Set<string>();
-    let cur: Branch | null = branch;
-    while (cur && !seen.has(cur.id)) {
-      seen.add(cur.id);
-      chain.unshift(cur);
-      cur = cur.parentBranchId ? this.repo.getBranch(cur.parentBranchId) : null;
+    for (const n of this.inheritedNodes(branch)) {
+      const origin = n.branchId === branch.id ? "local" : "inherited";
+      items.push(...this.nodeItems(n.branchId, n, origin));
     }
-
-    for (let i = 0; i < chain.length - 1; i++) {
-      const anc = chain[i];
-      const nodes = this.repo.listNodesByBranch(anc.id);
-      // Include up to and including the fork point (target child branch's forkFromNodeId).
-      const childBranch = chain[i + 1];
-      const stopAt = childBranch.forkFromNodeId;
-      for (const n of nodes) {
-        items.push(...this.nodeItems(anc.id, n, "inherited"));
-        if (stopAt && n.id === stopAt) break;
-      }
-    }
-
-    const local = this.repo.listNodesByBranch(branch.id);
-    for (const n of local) items.push(...this.nodeItems(branch.id, n, "local"));
-
     return items;
   }
 
@@ -921,12 +908,116 @@ export class DomainService {
     return this.repo.listArtifactsByTask(taskId);
   }
 
-  private collectLineage(node: ConversationNode, acc: ConversationNode[]): void {
-    acc.push(node);
-    if (node.parentNodeId) {
-      const p = this.repo.getNode(node.parentNodeId);
-      if (p && p.branchId === node.branchId) this.collectLineage(p, acc);
+  // ---- apply operations (E4b, docs/14 §4.3) ----
+  //
+  // An apply is recorded as a DURABLE LEDGER ROW before any file is touched, so
+  // a mid-apply crash leaves evidence (which paths landed, which did not, where
+  // the backup lives) instead of an unexplained target. The row id is a
+  // DETERMINISTIC hash computed by the caller (source+target descriptor), which
+  // is what makes a repeated click detectable: the second call finds the same id.
+
+  /** Create the ledger row (status "applying"). Returns it for the caller to run. */
+  startApplyOperation(input: {
+    id: string;
+    taskId: string;
+    projectId: string;
+    branchId: string | null;
+    targetPath: string;
+    baseRef: string | null;
+    confirmToken: string;
+  }): ApplyOperation {
+    const task = this.repo.getTask(input.taskId);
+    if (!task) throw new DomainError(`task ${input.taskId} not found`);
+    const existing = this.repo.getApplyOperation(input.id);
+    if (existing) throw new DomainError(`apply operation ${input.id} already exists`);
+    const at = this.now();
+    const o: ApplyOperation = {
+      id: input.id,
+      taskId: input.taskId,
+      projectId: input.projectId,
+      branchId: input.branchId,
+      targetPath: input.targetPath,
+      baseRef: input.baseRef,
+      confirmToken: input.confirmToken,
+      status: "applying",
+      appliedJson: "[]",
+      pendingJson: "[]",
+      targetRestored: false,
+      backupDir: null,
+      error: null,
+      createdAt: at,
+      updatedAt: at,
+    };
+    this.repo.insertApplyOperation(o);
+    return this.repo.getApplyOperation(o.id) as ApplyOperation;
+  }
+
+  getApplyOperation(id: string): ApplyOperation | null {
+    return this.repo.getApplyOperation(id);
+  }
+
+  listApplyOperationsByTask(taskId: string): ApplyOperation[] {
+    return this.repo.listApplyOperationsByTask(taskId);
+  }
+
+  /** Update the ledger row after a (possibly partial/failed) apply attempt. */
+  updateApplyOperation(
+    id: string,
+    fields: {
+      status?: ApplyOperationStatus;
+      applied?: string[];
+      pending?: string[];
+      targetRestored?: boolean;
+      backupDir?: string | null;
+      error?: string | null;
     }
+  ): ApplyOperation {
+    const existing = this.repo.getApplyOperation(id);
+    if (!existing) throw new DomainError(`apply operation ${id} not found`);
+    this.repo.updateApplyOperation(id, {
+      status: fields.status,
+      appliedJson: fields.applied === undefined ? undefined : JSON.stringify(fields.applied),
+      pendingJson: fields.pending === undefined ? undefined : JSON.stringify(fields.pending),
+      targetRestored: fields.targetRestored,
+      backupDir: fields.backupDir,
+      error: fields.error,
+      updatedAt: this.now(),
+    });
+    return this.repo.getApplyOperation(id) as ApplyOperation;
+  }
+
+  /**
+   * The ancestor nodes a branch inherits, oldest first: for each ancestor branch
+   * (root → parent) the nodes up to AND INCLUDING the child branch's fork point,
+   * then the branch's own nodes. This is the single source of truth for BOTH the
+   * UI read model (getEffectiveConversation) and the reconstruction seed
+   * (captureBranchContext) — sharing it is what guarantees the model and the UI
+   * can never disagree about a branch's inherited context.
+   *
+   * Cycle-guarded: a re-parented / corrupted chain with a branch cycle stops at
+   * the first repeat instead of recursing forever.
+   */
+  private inheritedNodes(branch: Branch): ConversationNode[] {
+    const out: ConversationNode[] = [];
+    const chain: Branch[] = [];
+    const seen = new Set<string>();
+    let cur: Branch | null = branch;
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      chain.unshift(cur);
+      cur = cur.parentBranchId ? this.repo.getBranch(cur.parentBranchId) : null;
+    }
+
+    for (let i = 0; i < chain.length - 1; i++) {
+      const anc = chain[i];
+      const stopAt = chain[i + 1].forkFromNodeId;
+      for (const n of this.repo.listNodesByBranch(anc.id)) {
+        out.push(n);
+        if (stopAt && n.id === stopAt) break;
+      }
+    }
+    for (const n of this.repo.listNodesByBranch(branch.id)) out.push(n);
+    return out;
   }
 
   /**

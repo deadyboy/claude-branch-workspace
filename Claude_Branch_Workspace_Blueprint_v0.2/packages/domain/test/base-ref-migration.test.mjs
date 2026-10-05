@@ -13,10 +13,12 @@ function fresh(path) {
   return { db, repo: new Repository(db), svc: new DomainService(new Repository(db)) };
 }
 
-test("schema version is 5 and branches.base_ref exists after migration", () => {
+test("schema version matches SCHEMA_VERSION and branches.base_ref exists", () => {
   const { db } = fresh(null);
-  assert.equal(SCHEMA_VERSION, 5);
-  assert.equal(db.pragma("user_version", { simple: true }), 5);
+  // Reference the constant, not a hard-coded number: this test pins that
+  // user_version tracks SCHEMA_VERSION, not a particular value. (Hard-coding 5
+  // here is what made a later migration look like a test failure.)
+  assert.equal(db.pragma("user_version", { simple: true }), SCHEMA_VERSION);
   const cols = db.pragma("table_info(branches)").map((c) => c.name);
   assert.ok(cols.includes("base_ref"), "base_ref column added by v4");
   db.close();
@@ -60,9 +62,9 @@ test("existing DB: reopen is migration-idempotent and old rows stay readable", (
     first.svc.recordBaseRef(main.id, "deadbeef");
     first.db.close();
 
-    // Reopen: migrate() sees user_version=5 and must not re-run v4/v5.
+    // Reopen: migrate() sees user_version up to date and must not clobber rows.
     const again = fresh(path);
-    assert.equal(again.db.pragma("user_version", { simple: true }), 5);
+    assert.equal(again.db.pragma("user_version", { simple: true }), SCHEMA_VERSION);
     const reread = again.svc.getBranch(main.id);
     assert.equal(reread.baseRef, "deadbeef"); // baseline survived
     assert.equal(reread.projectId, p.id);
