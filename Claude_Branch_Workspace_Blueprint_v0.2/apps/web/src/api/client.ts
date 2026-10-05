@@ -14,6 +14,7 @@ import type {
   EventFrame,
   WorkspaceMode,
   WorkspaceStatus,
+  BranchChanges,
 } from "../types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -155,6 +156,9 @@ export const api = {
     ),
   node: (id: string) => req<ConversationNode>(`/api/nodes/${id}`),
   workspace: (id: string) => req<WorkspaceStatus>(`/api/branches/${id}/workspace`),
+  // E4a result review (S0 §4.2). Returns committed AND uncommitted changes —
+  // a plain git diff would silently omit commits made during the run.
+  branchChanges: (id: string) => req<BranchChanges>(`/api/branches/${id}/changes`),
 
   // ---- conversation / nodes (gate 3) ----
   conversation: (branchId: string) =>

@@ -132,6 +132,30 @@ export interface EventFrame {
   payload: unknown;
 }
 
+// S3 / E4a: the read-only result review for a branch's work.
+export type ChangeStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";
+
+export interface ChangeEntry {
+  path: string;
+  status: ChangeStatus;
+  oldPath?: string;
+  binary: boolean;
+  sizeBytes?: number;
+  /** null for binary files — contents are never diffed (S0 §4.2). */
+  patch?: string | null;
+}
+
+export interface BranchChanges {
+  baseRef: string | null;
+  workspacePath: string | null;
+  workspaceMode: WorkspaceMode;
+  /** Commits made during the run — separate from uncommitted on purpose. */
+  committed: ChangeEntry[];
+  uncommitted: ChangeEntry[];
+  untracked: ChangeEntry[];
+  truncated: boolean;
+}
+
 export interface WorkspaceStatus {
   mode: WorkspaceMode;
   path: string | null;

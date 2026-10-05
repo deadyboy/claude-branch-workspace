@@ -341,3 +341,52 @@ input[type="text"], textarea {
 
 .view-tabs { display: inline-flex; gap: 4px; margin-left: 12px; }
 .view-tabs button.active { border-color: var(--accent); color: var(--accent); }
+
+/* ---- Tree ancestry (S2): forks render NESTED under their source, so the
+   fork relationship is visible without opening the graph view. ---- */
+.tree-fork-glyph { color: var(--accent); margin-right: 2px; }
+.tree-forkfrom { color: var(--muted); font-size: 10px; }
+
+/* ---- Changes panel (S3 / E4a) ---- */
+.pane.results { overflow: auto; }
+.changes-panel { display: flex; flex-direction: column; padding: 8px; gap: 6px; }
+.changes-hd { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.changes-base { color: var(--muted); font-size: 11px; font-family: ui-monospace, monospace; }
+.changes-caveat {
+  background: rgba(255,159,67,.12);
+  border: 1px solid rgba(255,159,67,.3);
+  color: var(--attn);
+  border-radius: 5px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+.changes-workspace { color: var(--muted); font-size: 11px; }
+.chg-group { border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.chg-group-hd {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; background: var(--panel2); font-size: 11px; font-weight: 600;
+}
+.chg-group-note { color: var(--muted); font-weight: 400; }
+.chg-row { border-top: 1px solid var(--border); }
+.chg-main {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: transparent; border: none; text-align: left; padding: 4px 8px;
+}
+.chg-status {
+  font-family: ui-monospace, monospace; font-size: 11px; font-weight: 700;
+  min-width: 20px;
+}
+.chg-added { color: var(--ok); }
+.chg-modified { color: var(--warn); }
+.chg-deleted { color: var(--err); }
+.chg-renamed { color: var(--accent); }
+.chg-untracked { color: var(--muted); }
+.chg-path { flex: 1; font-family: ui-monospace, monospace; font-size: 11px; word-break: break-all; }
+.chg-size { color: var(--muted); font-size: 10px; }
+.chg-detail { padding: 0 8px 8px 28px; }
+.chg-binary-note { color: var(--muted); font-size: 11px; font-style: italic; }
+.chg-patch {
+  background: var(--bg); border: 1px solid var(--border); border-radius: 4px;
+  padding: 8px; font-size: 11px; overflow: auto; max-height: 320px; margin: 0;
+  white-space: pre;
+}
