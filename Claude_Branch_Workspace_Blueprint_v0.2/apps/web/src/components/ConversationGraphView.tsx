@@ -10,91 +10,15 @@
 // rearranges only `positions` and can never mutate ancestry (S0 §2.3.2).
 
 import { useMemo, useState } from "react";
-import { buildConversationGraph } from "../lib/conversationGraph";
-import type { ConversationGraph, GraphNode } from "../lib/conversationGraph";
+import {
+  buildConversationGraph,
+  layoutGraph,
+  GRAPH_NODE_W as NODE_W,
+  GRAPH_NODE_H as NODE_H,
+} from "../lib/conversationGraph";
 import { useStore } from "../store/useStore";
 import { ForkDialog } from "./ForkDialog";
 import type { Branch } from "../types";
-
-const COL_W = 168;
-const ROW_H = 40;
-const NODE_W = 132;
-const NODE_H = 24;
-
-interface Positioned {
-  node: GraphNode;
-  x: number;
-  y: number;
-}
-
-/**
- * Depth-first layout that groups a branch with its own turns in a column and
- * places forks to the right of the turn they came from. Deterministic for a
- * given graph, which keeps the 5-run performance measurement comparable.
- */
-function layout(graph: ConversationGraph): Map<string, Positioned> {
-  const placed = new Map<string, Positioned>();
-  const childrenOf = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    if (edge.kind !== "fork") continue;
-    const list = childrenOf.get(edge.source) ?? [];
-    list.push(edge.target);
-    childrenOf.set(edge.source, list);
-  }
-  // Sort fork children by id so two runs lay out identically.
-  for (const list of childrenOf.values()) list.sort();
-
-  const turnChildren = new Map<string, string[]>();
-  for (const edge of graph.edges) {
-    if (edge.kind !== "turnSeq") continue;
-    const list = turnChildren.get(edge.source) ?? [];
-    list.push(edge.target);
-    turnChildren.set(edge.source, list);
-  }
-
-  const branchNodes = graph.nodes.filter((n) => n.kind === "branch");
-  const roots = branchNodes.filter((b) => !graph.edges.some((e) => e.kind === "parent" && e.target === b.id));
-  let cursorY = 0;
-
-  const visited = new Set<string>();
-  function placeBranch(branchNodeId: string, depth: number): void {
-    if (visited.has(branchNodeId)) return;
-    visited.add(branchNodeId);
-    const branchId = branchNodeId.slice("branch:".length);
-    const node = graph.nodes.find((n) => n.id === branchNodeId);
-    if (!node) return;
-    placed.set(branchNodeId, { node, x: depth * COL_W, y: cursorY });
-    cursorY += ROW_H;
-
-    // The branch's own turns continue down the same column.
-    const ownTurns = graph.edges
-      .filter((e) => e.kind === "owns" && e.source === branchNodeId && e.target.startsWith("turn:"))
-      .map((e) => graph.nodes.find((n) => n.id === e.target))
-      .filter((n): n is GraphNode => Boolean(n))
-      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
-    for (const turn of ownTurns) {
-      if (placed.has(turn.id)) continue;
-      placed.set(turn.id, { node: turn, x: depth * COL_W, y: cursorY });
-      cursorY += ROW_H;
-    }
-
-    // Forks from any of this branch's turns move one column right.
-    for (const turn of ownTurns) {
-      for (const childBranchNodeId of childrenOf.get(turn.id) ?? []) {
-        placeBranch(childBranchNodeId, depth + 1);
-      }
-    }
-    // A branch id that is referenced only via parent edges still needs placing.
-    void branchId;
-    void turnChildren;
-  }
-
-  for (const root of roots.sort((a, b) => a.id.localeCompare(b.id))) placeBranch(root.id, 0);
-  // Any branch not reachable from a root (archived orphans) still renders.
-  for (const b of branchNodes.sort((a, b) => a.id.localeCompare(b.id))) placeBranch(b.id, 0);
-
-  return placed;
-}
 
 const NODE_FILL: Record<string, string> = {
   branch: "#1b202b",
@@ -126,7 +50,7 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
     [st.branches, st.nodesByBranch, st.agentRunsByBranch]
   );
 
-  const positions = useMemo(() => layout(graph), [graph]);
+  const positions = useMemo(() => layoutGraph(graph), [graph]);
 
   if (graph.nodes.length === 0) {
     return <div className="empty">No branches to graph yet.</div>;

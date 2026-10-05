@@ -9,6 +9,7 @@ import {
   splitInherited,
   isForkable,
   buildBreadcrumb,
+  layoutGraph,
 } from "../src/lib/conversationGraph.ts";
 
 // Minimal factory helpers — only the fields the projection reads.
@@ -187,4 +188,61 @@ test("E2: agent runs are attributed to their owner branch and never look like br
   assert.ok(runNodes.every((n) => n.kind !== "branch"));
   const spawned = g.edges.filter((e) => e.kind === "spawned");
   assert.deepEqual(spawned.map((e) => `${e.source}->${e.target}`), ["run:r1->run:r2"]);
+});
+
+// ---- layout (S2/E7) ---------------------------------------------------------
+// Layout was previously trapped inside the React component, so it could be
+// neither tested nor measured. It now lives in the pure module.
+
+test("E7: layout is deterministic and places every node exactly once", () => {
+  const input = d1();
+  const g = buildConversationGraph(input);
+  const a = layoutGraph(g);
+  const b = layoutGraph(g);
+  assert.deepEqual([...a.keys()].sort(), [...b.keys()].sort(), "stable key set");
+  for (const [id, pa] of a) {
+    const pb = b.get(id);
+    assert.equal(pa.x, pb.x, `${id} x stable`);
+    assert.equal(pa.y, pb.y, `${id} y stable`);
+  }
+  // Every graph node must be positioned, or it would be invisible.
+  for (const n of g.nodes) assert.ok(a.has(n.id), `${n.id} not positioned`);
+});
+
+test("E7: a fork is placed to the RIGHT of the turn it came from", () => {
+  const g = buildConversationGraph(d1());
+  const pos = layoutGraph(g);
+  const forkSource = pos.get("turn:m2");
+  const forked = pos.get("branch:A");
+  assert.ok(forkSource && forked, "both positioned");
+  assert.ok(forked.x > forkSource.x, "fork sits in a deeper column");
+});
+
+test("E7: layout never mutates ancestry (drag is layout-only)", () => {
+  const input = d1();
+  const before = JSON.stringify(buildConversationGraph(input).edges);
+  const g = buildConversationGraph(input);
+  layoutGraph(g);
+  const after = JSON.stringify(buildConversationGraph(input).edges);
+  assert.equal(before, after);
+});
+
+test("E7: a parent cycle cannot hang layout", () => {
+  const branches = [
+    branch({ id: "x", displayName: "X", parentBranchId: "y" }),
+    branch({ id: "y", displayName: "Y", parentBranchId: "x" }),
+  ];
+  const g = buildConversationGraph({ branches, nodesByBranch: {} });
+  const pos = layoutGraph(g);
+  assert.equal(pos.size, 2, "both placed, no infinite loop");
+});
+
+test("E7: an orphan branch is still positioned", () => {
+  const branches = [
+    branch({ id: "main", displayName: "Main" }),
+    branch({ id: "lost", displayName: "Lost", parentBranchId: "gone" }),
+  ];
+  const g = buildConversationGraph({ branches, nodesByBranch: {} });
+  const pos = layoutGraph(g);
+  assert.ok(pos.has("branch:lost"), "orphan must be visible");
 });

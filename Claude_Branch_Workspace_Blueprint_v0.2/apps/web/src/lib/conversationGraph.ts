@@ -235,3 +235,92 @@ export function resolveTurnOwner(
   }
   return null;
 }
+
+// ---- layout -----------------------------------------------------------------
+//
+// Kept in this PURE module (not in the React component) for two reasons the
+// review surfaced: it can then be unit-tested without a DOM, and the E7
+// performance number can include layout rather than measuring projection only.
+// Layout never mutates ancestry — it only assigns coordinates (S0 §2.3.2).
+
+export const GRAPH_COL_W = 168;
+export const GRAPH_ROW_H = 40;
+export const GRAPH_NODE_W = 132;
+export const GRAPH_NODE_H = 24;
+
+export interface Positioned {
+  node: GraphNode;
+  x: number;
+  y: number;
+}
+
+/**
+ * Depth-first layout: a branch and its own turns occupy one column; forks sit
+ * one column to the right of the turn they came from. Deterministic for a given
+ * graph, so repeated measurement runs are comparable.
+ */
+export function layoutGraph(graph: ConversationGraph): Map<string, Positioned> {
+  const placed = new Map<string, Positioned>();
+  const nodeById = new Map(graph.nodes.map((n) => [n.id, n]));
+
+  const forkChildren = new Map<string, string[]>();
+  const ownTurnsOf = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    if (edge.kind === "fork") {
+      const list = forkChildren.get(edge.source) ?? [];
+      list.push(edge.target);
+      forkChildren.set(edge.source, list);
+    } else if (edge.kind === "owns" && edge.target.startsWith("turn:")) {
+      const list = ownTurnsOf.get(edge.source) ?? [];
+      list.push(edge.target);
+      ownTurnsOf.set(edge.source, list);
+    }
+  }
+  // Sort so two runs over the same graph lay out identically.
+  for (const list of forkChildren.values()) list.sort();
+  for (const list of ownTurnsOf.values()) {
+    list.sort((a, b) => {
+      const na = nodeById.get(a);
+      const nb = nodeById.get(b);
+      return (na?.label ?? "").localeCompare(nb?.label ?? "", undefined, { numeric: true });
+    });
+  }
+
+  const branchNodes = graph.nodes.filter((n) => n.kind === "branch");
+  const childBranchIds = new Set(
+    graph.edges.filter((e) => e.kind === "parent").map((e) => e.target)
+  );
+  const roots = branchNodes.filter((b) => !childBranchIds.has(b.id));
+  let cursorY = 0;
+
+  const visited = new Set<string>();
+  const placeBranch = (branchNodeId: string, depth: number): void => {
+    if (visited.has(branchNodeId)) return; // cycle guard: never loop forever
+    visited.add(branchNodeId);
+    const node = nodeById.get(branchNodeId);
+    if (!node) return;
+    placed.set(branchNodeId, { node, x: depth * GRAPH_COL_W, y: cursorY });
+    cursorY += GRAPH_ROW_H;
+
+    const ownTurns = ownTurnsOf.get(branchNodeId) ?? [];
+    for (const turnId of ownTurns) {
+      if (placed.has(turnId)) continue;
+      const turn = nodeById.get(turnId);
+      if (!turn) continue;
+      placed.set(turnId, { node: turn, x: depth * GRAPH_COL_W, y: cursorY });
+      cursorY += GRAPH_ROW_H;
+    }
+
+    for (const turnId of ownTurns) {
+      for (const childBranch of forkChildren.get(turnId) ?? []) {
+        placeBranch(childBranch, depth + 1);
+      }
+    }
+  };
+
+  for (const root of [...roots].sort((a, b) => a.id.localeCompare(b.id))) placeBranch(root.id, 0);
+  // A branch unreachable from any root (orphan/archived) still renders.
+  for (const b of [...branchNodes].sort((a, b) => a.id.localeCompare(b.id))) placeBranch(b.id, 0);
+
+  return placed;
+}

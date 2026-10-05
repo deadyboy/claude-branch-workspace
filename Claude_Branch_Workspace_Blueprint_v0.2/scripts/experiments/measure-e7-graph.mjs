@@ -10,7 +10,7 @@
 // must beat, and they hold whether or not one is ever adopted.
 
 import { readFile } from "node:fs/promises";
-import { buildConversationGraph } from "../../apps/web/src/lib/conversationGraph.ts";
+import { buildConversationGraph, layoutGraph } from "../../apps/web/src/lib/conversationGraph.ts";
 
 const [truthPath, apiBase] = process.argv.slice(2);
 if (!truthPath || !apiBase) {
@@ -44,16 +44,19 @@ for (const b of branches) {
 
 const input = { branches, nodesByBranch, agentRunsByBranch, includeAgentRuns: true };
 buildConversationGraph(input); // warm-up
+layoutGraph(buildConversationGraph(input));
 
 const samples = [];
+let lastCounts = { nodes: 0, edges: 0, placed: 0 };
 for (let i = 0; i < 5; i++) {
   const t0 = performance.now();
   const g = buildConversationGraph(input);
+  // Layout is included: a projection-only number would not answer "how long
+  // until the graph is OPERABLE", which is what the M1 target asks.
+  const placed = layoutGraph(g);
   const t1 = performance.now();
   samples.push(t1 - t0);
-  if (i === 0) {
-    var lastCounts = { nodes: g.nodes.length, edges: g.edges.length };
-  }
+  lastCounts = { nodes: g.nodes.length, edges: g.edges.length, placed: placed.size };
 }
 
 const turnCount = Object.values(nodesByBranch).flat().length;
@@ -63,8 +66,8 @@ const median = [...samples].sort((a, b) => a - b)[Math.floor(samples.length / 2)
 console.log(`dataset      : ${truth.dataset}`);
 console.log(`branches     : ${branches.length}`);
 console.log(`turns        : ${turnCount}`);
-console.log(`graph nodes  : ${lastCounts.nodes}, edges: ${lastCounts.edges}`);
-console.log(`projection ms: [${samples.map((s) => s.toFixed(2)).join(", ")}]`);
+console.log(`graph nodes  : ${lastCounts.nodes}, edges: ${lastCounts.edges}, positioned: ${lastCounts.placed}`);
+console.log(`projection+layout ms: [${samples.map((s) => s.toFixed(2)).join(", ")}]`);
 console.log(`median ms    : ${median.toFixed(2)}`);
 console.log(`budget ms    : ${budgetMs} (${branches.length <= 25 ? "D2 class" : "D3 class"})`);
 console.log(`RESULT       : ${median <= budgetMs ? "PASS" : "FAIL"}`);
