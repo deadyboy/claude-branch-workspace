@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { Repository } from "./repository.js";
 import type {
   AgentRun,
+  Artifact,
+  ArtifactKind,
   Branch,
   BranchContextSnapshot,
   ConversationNode,
@@ -12,6 +14,9 @@ import type {
   Message,
   Project,
   RuntimeSession,
+  Task,
+  TaskAttempt,
+  TaskStatus,
 } from "./types.js";
 
 export class DomainError extends Error {
@@ -118,6 +123,7 @@ export class DomainService {
       runtimeSessionId: null,
       runtimeProfileId: null,
       workspacePath: null,
+      baseRef: null, // recorded on first bind (E4a) — never at creation
       status: "active",
       createdAt: this.now(),
       archivedAt: null,
@@ -157,6 +163,7 @@ export class DomainService {
       runtimeSessionId: null,
       runtimeProfileId: null,
       workspacePath: null,
+      baseRef: null, // recorded on first bind (E4a) — never at creation
       status: "active",
       createdAt: this.now(),
       archivedAt: null,
@@ -196,6 +203,19 @@ export class DomainService {
     }
     if (!input.path && branch.status !== "archived") throw new DomainError("only archived workspaces can be detached");
     this.repo.bindBranchWorkspace(branchId, input.mode, input.path, input.originStrategy);
+    return this.getBranch(branchId)!;
+  }
+
+  /**
+   * Record the E4a baseline commit for a branch, once. The repository write is
+   * guarded (base_ref IS NULL), so repeated calls after the first are no-ops and
+   * the "before work began" value is preserved across restarts. Returns the
+   * refreshed branch.
+   */
+  recordBaseRef(branchId: string, baseRef: string): Branch {
+    const branch = this.getBranch(branchId);
+    if (!branch) throw new DomainError(`branch ${branchId} not found`);
+    this.repo.setBaseRef(branchId, baseRef);
     return this.getBranch(branchId)!;
   }
 
@@ -687,6 +707,218 @@ export class DomainService {
     });
 
     return { cancelledNodes, interruptedSessions };
+  }
+
+  // ---- tasks / attempts / artifacts (S4, docs/14 §5) ----
+  //
+  // Semantics freeze (E5):
+  //   • A Task is durable; Task.status is an AGGREGATE view of its attempts.
+  //   • Each attempt is its own row; a retry APPENDS a new attempt and never
+  //     rewrites an old one — old attempts are always retained ("重试不丢旧记录").
+  //   • branchId is validated against the task's project when supplied; a task
+  //     may legitimately have branchId === null (UI/MCP binds it later). We do
+  //     NOT auto-create a branch here.
+
+  /** Validate that a branch (if given) exists and belongs to `projectId`. */
+  private requireBranchInProject(branchId: string, projectId: string): void {
+    const b = this.repo.getBranch(branchId);
+    if (!b) throw new DomainError(`branch ${branchId} not found`);
+    if (b.projectId !== projectId) {
+      throw new DomainError(`branch ${branchId} belongs to project ${b.projectId}, not ${projectId}`);
+    }
+  }
+
+  createTask(input: {
+    projectId: string;
+    title: string;
+    instructions: string;
+    branchId?: string | null;
+    role?: string | null;
+    status?: TaskStatus;
+  }): Task {
+    const project = this.repo.getProject(input.projectId);
+    if (!project) throw new DomainError(`project ${input.projectId} not found`);
+    if (!input.title) throw new DomainError("task title must not be empty");
+    if (!input.instructions) throw new DomainError("task instructions must not be empty");
+    if (input.branchId) this.requireBranchInProject(input.branchId, input.projectId);
+
+    const at = this.now();
+    const t: Task = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      branchId: input.branchId ?? null,
+      title: input.title,
+      instructions: input.instructions,
+      role: input.role ?? null,
+      // Default "queued": an unscheduled task is waiting for a slot, not running.
+      status: input.status ?? "queued",
+      createdAt: at,
+      updatedAt: at,
+    };
+    this.repo.insertTask(t);
+    return this.repo.getTask(t.id) as Task;
+  }
+
+  getTask(id: string): Task | null {
+    return this.repo.getTask(id);
+  }
+
+  listTasksByProject(projectId: string): Task[] {
+    return this.repo.listTasksByProject(projectId);
+  }
+
+  /** Edit task fields (E5 "角色和名称可编辑"). Identity is preserved. */
+  updateTask(id: string, fields: { title?: string; instructions?: string; role?: string | null; branchId?: string | null }): Task {
+    const t = this.repo.getTask(id);
+    if (!t) throw new DomainError(`task ${id} not found`);
+    if (fields.title !== undefined && !fields.title) throw new DomainError("task title must not be empty");
+    if (fields.instructions !== undefined && !fields.instructions) throw new DomainError("task instructions must not be empty");
+    if (fields.branchId) this.requireBranchInProject(fields.branchId, t.projectId);
+    this.repo.updateTask(id, {
+      title: fields.title,
+      instructions: fields.instructions,
+      role: fields.role,
+      branchId: fields.branchId,
+      updatedAt: this.now(),
+    });
+    return this.repo.getTask(id) as Task;
+  }
+
+  /** Explicit aggregate-status set (e.g. cancel the whole task). */
+  updateTaskStatus(id: string, status: TaskStatus): Task {
+    const t = this.repo.getTask(id);
+    if (!t) throw new DomainError(`task ${id} not found`);
+    this.repo.updateTask(id, { status, updatedAt: this.now() });
+    return this.repo.getTask(id) as Task;
+  }
+
+  /**
+   * Append a NEW attempt to a task and refresh the task's aggregate status.
+   * Retries call this again — they never reuse or overwrite an earlier attempt.
+   */
+  addTaskAttempt(input: {
+    taskId: string;
+    branchId?: string | null;
+    nodeId?: string | null;
+    agentRunId?: string | null;
+    status?: TaskStatus;
+    resultRef?: string | null;
+    error?: string | null;
+    startedAt?: string | null;
+  }): TaskAttempt {
+    const task = this.repo.getTask(input.taskId);
+    if (!task) throw new DomainError(`task ${input.taskId} not found`);
+    // An attempt may run on the task's branch or an explicit one; validate when given.
+    const branchId = input.branchId ?? task.branchId;
+    if (branchId) this.requireBranchInProject(branchId, task.projectId);
+
+    const a: TaskAttempt = {
+      id: randomUUID(),
+      taskId: input.taskId,
+      branchId: branchId ?? null,
+      nodeId: input.nodeId ?? null,
+      agentRunId: input.agentRunId ?? null,
+      status: input.status ?? "running",
+      resultRef: input.resultRef ?? null,
+      error: input.error ?? null,
+      startedAt: input.startedAt ?? this.now(),
+      endedAt: null,
+    };
+    this.repo.transaction(() => {
+      this.repo.insertTaskAttempt(a);
+      if (a.status === "running" || a.status === "queued") {
+        this.repo.updateTask(task.id, { status: a.status, updatedAt: this.now() });
+      }
+    });
+    return this.repo.getTaskAttempt(a.id) as TaskAttempt;
+  }
+
+  /**
+   * Terminal transition for ONE attempt, then re-aggregate the task. The attempt
+   * row is preserved (it is only marked terminal, never deleted/reused).
+   */
+  completeTaskAttempt(
+    attemptId: string,
+    input: { status: Extract<TaskStatus, "completed" | "failed" | "cancelled">; resultRef?: string | null; error?: string | null }
+  ): TaskAttempt {
+    const attempt = this.repo.getTaskAttempt(attemptId);
+    if (!attempt) throw new DomainError(`task attempt ${attemptId} not found`);
+    const at = this.now();
+    this.repo.transaction(() => {
+      this.repo.completeTaskAttempt(attemptId, input.status, input.resultRef ?? null, input.error ?? null, at);
+      this.recomputeTaskStatus(attempt.taskId);
+    });
+    return this.repo.getTaskAttempt(attemptId) as TaskAttempt;
+  }
+
+  listTaskAttempts(taskId: string): TaskAttempt[] {
+    return this.repo.listTaskAttempts(taskId);
+  }
+
+  getTaskAttempt(id: string): TaskAttempt | null {
+    return this.repo.getTaskAttempt(id);
+  }
+
+  /**
+   * Aggregate task status from its attempts. A live (running/queued) attempt
+   * dominates; otherwise the MOST RECENT attempt's terminal status wins — so a
+   * task that failed once and then succeeded via a retry reads "completed",
+   * while the failed attempt row remains readable in the history.
+   */
+  private recomputeTaskStatus(taskId: string): void {
+    const attempts = this.repo.listTaskAttempts(taskId);
+    if (attempts.length === 0) return;
+    let aggregate: TaskStatus;
+    if (attempts.some((a) => a.status === "running")) aggregate = "running";
+    else if (attempts.some((a) => a.status === "queued")) aggregate = "queued";
+    else aggregate = attempts[attempts.length - 1].status;
+    this.repo.updateTask(taskId, { status: aggregate, updatedAt: this.now() });
+  }
+
+  createArtifact(input: {
+    projectId: string;
+    originBranchId?: string | null;
+    originNodeId?: string | null;
+    originTaskId?: string | null;
+    kind: ArtifactKind;
+    path?: string | null;
+    summary?: string | null;
+    id?: string;
+  }): Artifact {
+    const project = this.repo.getProject(input.projectId);
+    if (!project) throw new DomainError(`project ${input.projectId} not found`);
+    if (input.originTaskId) {
+      const t = this.repo.getTask(input.originTaskId);
+      if (!t) throw new DomainError(`task ${input.originTaskId} not found`);
+      if (t.projectId !== input.projectId) {
+        throw new DomainError(`task ${input.originTaskId} belongs to project ${t.projectId}, not ${input.projectId}`);
+      }
+    }
+    const a: Artifact = {
+      id: input.id ?? randomUUID(),
+      projectId: input.projectId,
+      originBranchId: input.originBranchId ?? null,
+      originNodeId: input.originNodeId ?? null,
+      originTaskId: input.originTaskId ?? null,
+      kind: input.kind,
+      path: input.path ?? null,
+      summary: input.summary ?? null,
+      createdAt: this.now(),
+    };
+    this.repo.insertArtifact(a);
+    return this.repo.getArtifact(a.id) as Artifact;
+  }
+
+  getArtifact(id: string): Artifact | null {
+    return this.repo.getArtifact(id);
+  }
+
+  listArtifacts(projectId: string): Artifact[] {
+    return this.repo.listArtifactsByProject(projectId);
+  }
+
+  listArtifactsByTask(taskId: string): Artifact[] {
+    return this.repo.listArtifactsByTask(taskId);
   }
 
   private collectLineage(node: ConversationNode, acc: ConversationNode[]): void {

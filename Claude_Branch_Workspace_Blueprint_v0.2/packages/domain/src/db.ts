@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 
 export type Db = Database.Database;
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 5;
 
 // Versioned migrations, applied in order. Each entry upgrades the DB from
 // version N-1 to N. Idempotent within a transaction per version.
@@ -181,6 +181,77 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
       `);
     },
   },
+  {
+    // S3 / E4a (docs/14 §4.2): the baseline commit for result review. Adds a
+    // nullable base_ref to branches — the HEAD observed when the branch's
+    // workspace was FIRST bound ("state before the work began"). Nullable so
+    // pre-existing rows stay readable; written once and never overwritten
+    // (see Repository.setBaseRef's guarded UPDATE).
+    version: 4,
+    apply(db) {
+      db.exec(`
+        ALTER TABLE branches ADD COLUMN base_ref TEXT;
+      `);
+    },
+  },
+  {
+    // S4 (docs/14 §5): task persistence for E5/E4b. Three additive tables —
+    // tasks / task_attempts / artifacts. A Task is the durable unit of work; a
+    // TaskAttempt is ONE try at it. Retries NEVER overwrite: each attempt is a
+    // new row, old attempts are retained (E5 "重试不丢旧记录"). Task.status is
+    // the aggregate view; attempts carry their own status.
+    //
+    // NOTE (intentional, minimal extension over the frozen §5 schema): tasks
+    // gains a nullable `role` column so E5's "任务角色和名称可编辑" has a home.
+    // No other column deviates from the frozen shape.
+    version: 5,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE tasks (
+          id           TEXT PRIMARY KEY,
+          project_id   TEXT NOT NULL,
+          branch_id    TEXT,
+          title        TEXT NOT NULL,
+          instructions TEXT NOT NULL,
+          role         TEXT,
+          status       TEXT NOT NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_branch ON tasks(branch_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+
+        CREATE TABLE task_attempts (
+          id           TEXT PRIMARY KEY,
+          task_id      TEXT NOT NULL,
+          branch_id    TEXT,
+          node_id      TEXT,
+          agent_run_id TEXT,
+          status       TEXT NOT NULL,
+          result_ref   TEXT,
+          error        TEXT,
+          started_at   TEXT NOT NULL,
+          ended_at     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id);
+
+        CREATE TABLE artifacts (
+          id               TEXT PRIMARY KEY,
+          project_id       TEXT NOT NULL,
+          origin_branch_id TEXT,
+          origin_node_id   TEXT,
+          origin_task_id   TEXT,
+          kind             TEXT NOT NULL,
+          path             TEXT,
+          summary          TEXT,
+          created_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
+        CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts(origin_task_id);
+      `);
+    },
+  },
 ];
 
 export function openDb(path: string | null): Db {
@@ -193,12 +264,21 @@ export function openDb(path: string | null): Db {
 
 export function migrate(db: Db): void {
   const current = db.pragma("user_version", { simple: true }) as number;
-  for (const m of MIGRATIONS) {
+  // Apply in VERSION order, not array order. Two independent writers append to
+  // this array (S4 tasks=5, S1 base_ref=4); a naive left-to-right pass would
+  // run 5 before 4 and then leave user_version=4, so the next open would RE-RUN
+  // 5 (CREATE TABLE → "already exists") and brick the DB. Sorting + adopting the
+  // true max keeps every version applied exactly once regardless of append order.
+  const ordered = [...MIGRATIONS].sort((a, b) => a.version - b.version);
+  let applied = current;
+  for (const m of ordered) {
     if (m.version > current) {
       db.transaction(() => {
         m.apply(db);
         db.pragma(`user_version = ${m.version}`);
       })();
+      applied = Math.max(applied, m.version);
     }
   }
+  if (applied !== current) db.pragma(`user_version = ${applied}`);
 }
