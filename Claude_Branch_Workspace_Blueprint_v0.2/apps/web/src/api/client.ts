@@ -21,10 +21,15 @@ import type {
 } from "../types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  // Only declare a JSON content-type when a body is actually sent. Fastify
+  // rejects `content-type: application/json` with an EMPTY body as a 400-class
+  // parse failure, which the error handler surfaces as a generic 500 — so
+  // unconditionally setting it broke every bodyless POST (interrupt, archive).
+  if (init?.body !== undefined && init.body !== null && !("content-type" in headers)) {
+    headers["content-type"] = "application/json";
+  }
+  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status} ${res.url}: ${body}`);
