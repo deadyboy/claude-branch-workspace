@@ -18,6 +18,8 @@ import type {
   Task,
   TaskDetail,
   TaskAttempt,
+  ApplyPreview,
+  ApplyResult,
 } from "../types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -201,6 +203,19 @@ export const api = {
     req<Task>("/api/tasks", {
       method: "POST",
       body: JSON.stringify({ projectId, title, instructions, ...(branchId ? { branchId } : {}) }),
+    }),
+  // E4b: preview is a pure read; confirming requires the token the preview
+  // returned, so a target that changed in between is refused rather than
+  // silently overwritten.
+  applyPreview: (taskId: string, targetPath?: string) =>
+    req<ApplyPreview>(`/api/tasks/${taskId}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ preview: true, ...(targetPath ? { targetPath } : {}) }),
+    }),
+  applyConfirm: (taskId: string, confirmToken: string, targetPath?: string) =>
+    req<ApplyResult>(`/api/tasks/${taskId}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ preview: false, confirmToken, ...(targetPath ? { targetPath } : {}) }),
     }),
   startTaskAttempt: (taskId: string) =>
     req<TaskAttempt>(`/api/tasks/${taskId}/attempts`, { method: "POST", body: JSON.stringify({}) }),

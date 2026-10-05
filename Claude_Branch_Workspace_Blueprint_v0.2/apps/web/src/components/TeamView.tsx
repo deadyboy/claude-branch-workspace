@@ -15,6 +15,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useStore, branchBusy } from "../store/useStore";
 import { api } from "../api/client";
 import type { AgentRun, Task, TaskAttempt } from "../types";
+import { ApplyPanel } from "./ApplyPanel";
 
 const RUN_META: Record<string, { dot: string; cls: string }> = {
   running: { dot: "running", cls: "running" },
@@ -36,6 +37,7 @@ export function TeamView() {
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [applyFor, setApplyFor] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     if (!projectId) return;
@@ -216,7 +218,20 @@ export function TeamView() {
                     Retry
                   </button>
                 )}
+                {task.status === "completed" && (
+                  <button
+                    className="task-apply"
+                    data-testid="task-apply"
+                    onClick={() => setApplyFor(applyFor === task.id ? null : task.id)}
+                    title="Preview applying this task's results to a target directory"
+                  >
+                    Apply…
+                  </button>
+                )}
               </div>
+              {applyFor === task.id && (
+                <ApplyPanel taskId={task.id} onClose={() => setApplyFor(null)} />
+              )}
               {expanded === task.id && (
                 <div className="task-attempts" data-testid="task-attempts">
                   <div className="task-attempts-hd">Attempts ({attempts.length})</div>

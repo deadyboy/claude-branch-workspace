@@ -337,8 +337,30 @@ function makeToken(p: TokenParts): string {
   return sha256hex(canonical);
 }
 
-function operationIdFor(taskId: string, branchId: string, targetPath: string): string {
-  return "apply_" + sha256hex(`${taskId}|${branchId}|${targetPath}`).slice(0, 32);
+/**
+ * Idempotency key for one apply.
+ *
+ * The source content (and its base) MUST be part of this key. Keying only on
+ * task|branch|target made a SECOND round of work on the same task/branch/target
+ * collide with the first operation and be reported as "replayed", so the new
+ * change silently never landed — found by an independent re-review probe that
+ * applied once, committed more work, and applied again.
+ *
+ * With sourceHash included:
+ *   - the SAME work applied again            -> same id  -> correctly "replayed"
+ *   - NEW work on the same task/target       -> new id   -> a real apply
+ */
+function operationIdFor(
+  taskId: string,
+  branchId: string,
+  targetPath: string,
+  sourceHash: string,
+  baseRef: string | null
+): string {
+  return (
+    "apply_" +
+    sha256hex(`${taskId}|${branchId}|${targetPath}|${sourceHash}|${baseRef ?? ""}`).slice(0, 32)
+  );
 }
 
 // A short-lived map from confirmToken → the inputs it was computed from, so a
@@ -394,11 +416,18 @@ async function resolveTarget(
   }
   const st = await stat(targetPath).catch(() => null);
   if (!st?.isDirectory()) throw new ApplyError("target directory does not exist or is not a directory", 400);
-  const root = await tryGit(targetPath, ["rev-parse", "--show-toplevel"]);
-  if (root == null) throw new ApplyError("target directory is inaccessible", 400);
-  const bare = (await tryGit(targetPath, ["rev-parse", "--is-bare-repository"]))?.trim() === "true";
-  if (bare) throw new ApplyError("target is a bare repository; refusing to apply", 400);
-  const targetIsGit = root.trim().length > 0;
+
+  // A directory stat() can see IS accessible. A non-git target is a legitimate
+  // case, not an error: `targetIsGit` exists precisely so the rest of this
+  // module can branch on it, and the token/hash code has a bounded-walk path
+  // for non-git targets. Throwing "inaccessible" here misdescribed the problem
+  // AND made every non-git target (e.g. the P2 notes project) unusable.
+  const root = await tryGit(targetPath, ["rev-parse", "--show-toplevel"]).catch(() => null);
+  const targetIsGit = typeof root === "string" && root.trim().length > 0;
+  if (targetIsGit) {
+    const bare = (await tryGit(targetPath, ["rev-parse", "--is-bare-repository"]))?.trim() === "true";
+    if (bare) throw new ApplyError("target is a bare repository; refusing to apply", 400);
+  }
   return {
     targetPath,
     targetExists: true,
@@ -458,7 +487,8 @@ async function prepare(
     target,
     manifest,
     parts,
-    operationId: operationIdFor(task.id, branch.id, target.targetPath),
+    // Source content is part of the identity: see operationIdFor's note.
+    operationId: operationIdFor(task.id, branch.id, target.targetPath, parts.sourceHash, parts.baseRef),
   };
 }
 
@@ -627,15 +657,28 @@ export async function applyTask(
 
   // ── ledger row (deterministic id) ──
   if (!existing) {
-    svc.startApplyOperation({
-      id: p.operationId,
-      taskId: p.task.id,
-      projectId: p.task.projectId,
-      branchId: p.branch.id,
-      targetPath: p.target.targetPath,
-      baseRef: p.changes.baseRef,
-      confirmToken: opts.confirmToken,
-    });
+    try {
+      svc.startApplyOperation({
+        id: p.operationId,
+        taskId: p.task.id,
+        projectId: p.task.projectId,
+        branchId: p.branch.id,
+        targetPath: p.target.targetPath,
+        baseRef: p.changes.baseRef,
+        confirmToken: opts.confirmToken,
+      });
+    } catch (err) {
+      // Two concurrent applies of the SAME work race between the ledger read
+      // above and this insert (there is an await in between). The loser must
+      // not surface a raw "already exists" 500: re-read and answer like the
+      // sequential case — replay if the winner finished, 409 if still running.
+      const raced = svc.getApplyOperation(p.operationId);
+      if (raced?.status === "applied") return replay(raced);
+      if (raced?.status === "applying") {
+        throw new ApplyError("apply already in progress for this target", 409);
+      }
+      throw err;
+    }
   } else {
     // A prior failed/partial attempt on the same deterministic id → retry.
     svc.updateApplyOperation(p.operationId, { status: "applying", applied: [], pending: [], error: null });

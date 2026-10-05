@@ -132,6 +132,63 @@ export interface EventFrame {
   payload: unknown;
 }
 
+// S4 / E4b: applying a task's result to a target directory. The preview is a
+// PURE READ — nothing is written until an explicit confirm with its token.
+export type ApplyAction = "write" | "delete";
+export type ApplyDecision = "apply" | "skip" | "conflict";
+
+export interface ApplyFileSummary {
+  path: string;
+  action: ApplyAction;
+  /** The source change status this op came from (a rename expands to delete+write). */
+  status: ChangeStatus;
+  group: "committed" | "uncommitted" | "untracked";
+  decision: ApplyDecision;
+  reason?: string;
+}
+
+export interface ApplyConflict {
+  path: string;
+  reason: string;
+}
+
+export interface ApplyPreview {
+  preview: true;
+  taskId: string;
+  projectId: string;
+  branchId: string | null;
+  sourceWorkspacePath: string | null;
+  sourceWorkspaceMode: WorkspaceMode;
+  baseRef: string | null;
+  sharedWorkspace: boolean;
+  targetPath: string;
+  targetExists: boolean;
+  targetIsGit: boolean;
+  targetDirty: boolean;
+  files: ApplyFileSummary[];
+  conflicts: ApplyConflict[];
+  canApply: boolean;
+  /** Set (with a reason) when changes could not be enumerated safely. */
+  blocked: string | null;
+  confirmToken: string;
+}
+
+export interface ApplyResult {
+  status: "applied" | "failed" | "partial" | "replayed";
+  operationId: string;
+  taskId: string;
+  projectId: string;
+  branchId: string | null;
+  targetPath: string;
+  baseRef: string | null;
+  applied: string[];
+  pending: string[];
+  targetRestored: boolean;
+  backupDir: string | null;
+  error: string | null;
+  replayed: boolean;
+}
+
 // S4 / E5: durable units of work. A Task persists and may be attempted several
 // times; a TaskAttempt is ONE try. Retries never overwrite an earlier attempt.
 export type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";

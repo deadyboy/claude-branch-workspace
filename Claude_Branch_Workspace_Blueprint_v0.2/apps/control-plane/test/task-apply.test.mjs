@@ -291,3 +291,70 @@ test('E4b success also records a changeset artifact for provenance', async t => 
   assert.equal(arts.length, 1);
   assert.equal(arts[0].kind, 'changeset');
 });
+
+// ────────────── non-git target (regression) ──────────────
+//
+// The fixture above always clones a GIT target, which is exactly why this gap
+// was missed: resolveTarget treated any directory `git rev-parse` could not
+// resolve as "inaccessible", so a plain folder — a completely legitimate E4b
+// target, and the shape the P2 notes project has — could never be applied to.
+// Found by driving the real UI against a non-git target directory.
+test('E4b: a NON-GIT target directory is usable, not reported as inaccessible', async t => {
+  const { task, dir, application } = await applyFixture(t);
+  // A plain directory: same idea as the git target above, but with no repository.
+  const plain = join(dir, 'plain-target');
+  mkdirSync(plain, { recursive: true });
+  writeFileSync(join(plain, 'a.txt'), 'original\n');
+
+  const pv = await post(application, task.id, {
+    preview: true,
+    targetPath: plain,
+  });
+
+  assert.equal(pv.statusCode, 200, `expected a usable preview, got ${pv.statusCode} ${pv.body}`);
+  const body = pv.json();
+  assert.equal(body.targetIsGit, false, 'a plain folder must report targetIsGit=false');
+  assert.equal(body.canApply, true, 'a plain folder must be applicable');
+  assert.ok(
+    body.files.some(f => f.path === 'a.txt' && f.decision === 'apply'),
+    'the changed file must be listed as applicable'
+  );
+});
+
+// ────────────── second round of work (regression) ──────────────
+//
+// The deterministic operation id must include the SOURCE identity. Keying only
+// on task|branch|target meant that after a successful apply, committing further
+// work on the same branch produced the SAME operation id, so the replay guard
+// returned the first operation's result — reporting success while the new work
+// silently never landed. Found by an independent re-review probe.
+//
+// This asserts the fix at its sharpest point: the second round's NEW file must
+// actually be written, and the second apply must not claim to be a replay.
+test('E4b: a second round of work applies newly added files (no false replay)', async t => {
+  const { application, task, target, cwd } = await applyFixture(t);
+
+  // Round 1.
+  const pv1 = (await post(application, task.id, { preview: true })).json();
+  const r1 = (await post(application, task.id, { preview: false, confirmToken: pv1.confirmToken })).json();
+  assert.equal(r1.status, 'applied');
+  assert.equal(readFileSync(join(target, 'a.txt'), 'utf8'), 'changed by source\n');
+
+  // Round 2: genuinely NEW work on the same branch/task/target.
+  writeFileSync(join(cwd, 'second.txt'), 'second round file\n');
+  gitIn(cwd, 'add', '.');
+  gitIn(cwd, 'commit', '-m', 'second round work');
+
+  const pv2 = (await post(application, task.id, { preview: true })).json();
+  const secondFile = pv2.files.find(f => f.path === 'second.txt');
+  assert.ok(secondFile, 'the new file must appear in the second preview');
+  assert.equal(secondFile.decision, 'apply', 'the new file must be applicable');
+
+  const r2 = (await post(application, task.id, { preview: false, confirmToken: pv2.confirmToken })).json();
+  assert.notEqual(r2.status, 'replayed', 'new work must NOT be reported as a replay of the old operation');
+  assert.equal(
+    readFileSync(join(target, 'second.txt'), 'utf8'),
+    'second round file\n',
+    'the second round must actually land, not be swallowed by idempotency'
+  );
+});

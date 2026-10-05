@@ -423,3 +423,31 @@ input[type="text"], textarea {
 .team-runs { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 4px; }
 .team-runs-hd { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
 .run-line { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }
+
+/* ---- Apply panel (S4 / E4b): preview -> explicit confirm -> honest result.
+   A conflict or partial apply must be visually distinct from success. ---- */
+.apply-panel { margin-top: 8px; border: 1px solid var(--border); border-radius: 6px; padding: 8px; background: var(--panel); }
+.apply-hd { display: flex; align-items: center; justify-content: space-between; font-weight: 600; margin-bottom: 6px; }
+.apply-target { font-size: 11px; margin-bottom: 4px; word-break: break-all; }
+.apply-meta { color: var(--muted); font-size: 11px; }
+.apply-files { margin: 8px 0; }
+.apply-files-hd { color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+.apply-file { display: flex; align-items: center; gap: 8px; padding: 2px 0; font-size: 11px; }
+.apply-file.apply-skip, .apply-file.apply-conflict { opacity: .7; }
+.apply-conflicts { margin: 8px 0; }
+.apply-conflict { display: flex; gap: 8px; font-size: 11px; padding: 2px 0; }
+.apply-reason { color: var(--attn); }
+.apply-warning {
+  background: rgba(255,159,67,.12); border: 1px solid rgba(255,159,67,.3);
+  color: var(--attn); border-radius: 5px; padding: 6px 8px; font-size: 11px; margin: 6px 0;
+}
+.apply-actions { display: flex; gap: 8px; margin-top: 8px; }
+.apply-note { color: var(--muted); font-size: 11px; margin: 6px 0 0; }
+.apply-result { display: flex; flex-direction: column; gap: 6px; }
+.apply-status { font-size: 12px; }
+.apply-list { font-size: 11px; word-break: break-all; }
+.apply-incomplete { color: var(--attn); }
+.apply-error { color: var(--err); font-size: 11px; word-break: break-all; }
+.apply-applied .apply-status strong { color: var(--ok); }
+.apply-failed .apply-status strong, .apply-partial .apply-status strong { color: var(--err); }
+.task-apply { font-size: 11px; }
