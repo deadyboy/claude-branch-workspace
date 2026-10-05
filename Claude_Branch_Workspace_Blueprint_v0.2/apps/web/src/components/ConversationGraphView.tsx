@@ -13,6 +13,7 @@ import { useMemo, useState } from "react";
 import { buildConversationGraph } from "../lib/conversationGraph";
 import type { ConversationGraph, GraphNode } from "../lib/conversationGraph";
 import { useStore } from "../store/useStore";
+import { ForkDialog } from "./ForkDialog";
 import type { Branch } from "../types";
 
 const COL_W = 168;
@@ -112,6 +113,7 @@ const STATUS_STROKE: Record<string, string> = {
 export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId: string) => void }) {
   const st = useStore();
   const [selected, setSelected] = useState<string | null>(null);
+  const [forkFrom, setForkFrom] = useState<{ branch: Branch; nodeId: string } | null>(null);
 
   const graph = useMemo(
     () =>
@@ -224,7 +226,29 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
               {selectedNode.forkable ? "completed — forkable" : "not forkable"}
             </span>
           )}
+          {/* Forking from the graph is the point of the whole view: the user
+              picks a historical turn and branches the conversation there.
+              Only a COMPLETED turn offers this (S0 §2.3.3), so the button is
+              absent rather than disabled-with-no-explanation. */}
+          {selectedNode.kind === "turn" && selectedNode.forkable && selectedNode.nodeId && (
+            <button
+              data-testid="graph-fork-button"
+              onClick={() => {
+                const owner = st.branches.find((b) => b.id === selectedNode.branchId);
+                if (owner && selectedNode.nodeId) setForkFrom({ branch: owner, nodeId: selectedNode.nodeId });
+              }}
+            >
+              Fork from here
+            </button>
+          )}
         </div>
+      )}
+      {forkFrom && (
+        <ForkDialog
+          branch={forkFrom.branch}
+          defaultNodeId={forkFrom.nodeId}
+          onClose={() => setForkFrom(null)}
+        />
       )}
     </div>
   );
