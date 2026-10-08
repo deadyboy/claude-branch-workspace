@@ -1,11 +1,12 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,mkdirSync,writeFileSync,symlinkSync,rmSync} from 'node:fs';
+import {mkdtempSync,writeFileSync,symlinkSync,realpathSync,rmSync} from 'node:fs';
 import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {readFileContent,resolveSafeFile,MAX_CONTENT_BYTES} from '../dist/file-content.js';
 import {buildProjectGraph} from '../dist/project-graph.js';
 import {setupService} from './helpers.mjs';
-function tree(t) { mkdirSync('F:/CodexTemp',{recursive:true}); const root=mkdtempSync('F:/CodexTemp/cbw-content-'); t.after(()=>rmSync(root,{recursive:true,force:true}));return root; }
+function tree(t) { const root=mkdtempSync(join(tmpdir(),'cbw-content-')); t.after(()=>rmSync(root,{recursive:true,force:true}));return root; }
 test('bounded content preserves UTF8 and represents missing/binary files',async t=>{
  const root=tree(t);writeFileSync(join(root,'text.txt'),'正文😀');writeFileSync(join(root,'binary.bin'),Buffer.from([1,0,2]));writeFileSync(join(root,'large.txt'),'文'.repeat(MAX_CONTENT_BYTES));
  assert.equal((await readFileContent(root,'text.txt')).content,'正文😀');assert.equal((await readFileContent(root,'missing.txt')).exists,false);
@@ -16,6 +17,7 @@ test('path traversal, absolute paths, credential names and symlink escapes are r
  const root=tree(t),outside=tree(t);writeFileSync(join(root,'.env'),'SYNTHETIC_SECRET');writeFileSync(join(outside,'private.txt'),'outside');
  for(const path of ['../outside.txt','F:/absolute.txt','.env','.git/config','secret.key','x:ads']) await assert.rejects(resolveSafeFile(root,path));
  try { symlinkSync(outside,join(root,'escape'),'junction'); } catch(e) { if(['EPERM','EACCES','ENOTSUP'].includes(e.code)) {t.diagnostic(`junction capability unavailable: ${e.code}`);return;}throw e; }
+ assert.equal(realpathSync(join(root,'escape')),realpathSync(outside));
  await assert.rejects(readFileContent(root,'escape/private.txt'),/escapes/);
 });
 test('artifact graph deduplicates root files and resolves worktree file to its branch',async t=>{
