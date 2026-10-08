@@ -66,6 +66,7 @@ test("ph4 golden path: boot, multi-turn, fork, no-leak, attention", async ({ pag
   await expect(page.locator(".msg-body").filter({ hasText: "echo for: refactor a.ts" })).toBeVisible();
 
   // g8 — timeline filled with live events + monotonic seq
+  await page.getByRole("button", { name: "Expand Event Timeline", exact: true }).click();
   const tlTypes = page.locator(".tl-type");
   await expect(tlTypes.first()).toBeVisible({ timeout: 20_000 });
   const seqs = await page.locator(".tl-seq").allTextContents();
