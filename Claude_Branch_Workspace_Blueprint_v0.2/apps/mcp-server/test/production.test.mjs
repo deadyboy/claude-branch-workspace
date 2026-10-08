@@ -1,3 +1,5 @@
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { openDb, Repository, DomainService } from "../../../packages/domain/dist/index.js";
@@ -60,7 +62,10 @@ test("stdio MCP drives a real buildApp + SQLite + FakeRuntime control plane", as
     staticDir: null,
     logger: false,
   });
-  const project = svc.createProject({ name: "mcp-production-test" });
+  mkdirSync("F:/CodexTemp",{recursive:true});
+  const root=mkdtempSync("F:/CodexTemp/cbw-mcp-task-");
+  writeFileSync(join(root,"result.txt"),"synthetic result");
+  const project = svc.createProject({ name: "mcp-production-test", rootPath: root });
   const main = svc.createRootConversation({ projectId: project.id, rootBranchName: "Main" });
   const address = await app.listen({ host: "127.0.0.1", port: 0 });
   const port = new URL(address).port;
@@ -104,6 +109,23 @@ test("stdio MCP drives a real buildApp + SQLite + FakeRuntime control plane", as
     assert.equal(execution.isError, undefined, execution.content?.[0]?.text);
     assert.ok(JSON.parse(execution.content[0].text).nodeCount >= 1);
 
+    const taskCreated = await client.callTool({name:"create_task",arguments:{projectId:project.id,branchId:childId,title:"tracked worker",instructions:"task result"}});
+    assert.equal(taskCreated.isError,undefined,taskCreated.content?.[0]?.text);
+    const taskId=JSON.parse(taskCreated.content[0].text).id;
+    const taskRun=await client.callTool({name:"run_task",arguments:{taskId}});
+    assert.equal(taskRun.isError,undefined,taskRun.content?.[0]?.text);
+    const taskNodeId=JSON.parse(taskRun.content[0].text).nodeId;
+    const taskResult=await client.callTool({name:"get_turn_result",arguments:{nodeId:taskNodeId,waitMs:2000}});
+    assert.equal(JSON.parse(taskResult.content[0].text).status,"completed");
+    const taskRead=await client.callTool({name:"get_task",arguments:{taskId}});
+    const tracked=JSON.parse(taskRead.content[0].text);
+    assert.equal(tracked.status,"completed");assert.equal(tracked.attempts[0].nodeId,taskNodeId);assert.ok(tracked.attempts[0].agentRunId);
+
+    const declared = await client.callTool({name:"register_artifact",arguments:{branchId:childId,nodeId:taskNodeId,path:"result.txt"}});
+    assert.equal(declared.isError,undefined,declared.content?.[0]?.text);
+    const artifact=JSON.parse(declared.content[0].text);assert.equal(artifact.originTaskId,taskId);assert.equal(artifact.originNodeId,taskNodeId);assert.equal(artifact.originBranchId,childId);
+    const invalidFile = await client.callTool({name:"register_artifact",arguments:{branchId:childId,nodeId:taskNodeId,path:"missing.txt"}});assert.equal(invalidFile.isError,true);
+
     const childMessage = await client.callTool({ name: "send_message", arguments: { branchId: childId, text: "child question" } });
     assert.equal(childMessage.isError, undefined, childMessage.content?.[0]?.text);
     const childNodeId = JSON.parse(childMessage.content[0].text).nodeId;
@@ -132,5 +154,6 @@ test("stdio MCP drives a real buildApp + SQLite + FakeRuntime control plane", as
     await client.close().catch(() => {});
     await app.close().catch(() => {});
     db.close();
+    rmSync(root,{recursive:true,force:true});
   }
 });

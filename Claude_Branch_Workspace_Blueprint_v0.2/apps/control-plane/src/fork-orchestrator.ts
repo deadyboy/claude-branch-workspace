@@ -35,7 +35,8 @@ import type { TurnScheduler } from "./turn-scheduler.js";
 export const TRANSCRIPT_ACK =
   "You are reconstructing a session from its prior conversation transcript, " +
   "included below. Do NOT re-run any command, tool, or file write it describes; " +
-  "treat it as read-only context. Acknowledge and await instructions.";
+  "treat it as read-only context. Reply with exactly TRANSCRIPT_ACK and nothing else. " +
+  "Do not summarize or explain the transcript.";
 
 export interface CreateForkArgs {
   projectId: string;

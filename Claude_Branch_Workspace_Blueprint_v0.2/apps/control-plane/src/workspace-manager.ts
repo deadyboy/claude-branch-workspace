@@ -22,6 +22,9 @@ export class WorkspaceManager {
     if (!(await stat(base)).isDirectory()) throw new Error("workspace must be a directory");
     if (branch.workspaceMode === "shared") {
       this.svc.bindBranchWorkspace(branch.id, { mode: "shared", path: base });
+      // E4a: record the baseline once, best-effort. A shared non-Git folder has
+      // no HEAD, so baseRef stays null rather than failing the bind.
+      await this.recordBaseRef(branch.id, base);
       return base;
     }
     const root = await git(base, ["rev-parse", "--show-toplevel"]);
@@ -39,7 +42,27 @@ export class WorkspaceManager {
     // branch owns this worktree. Changes and commits remain until explicit cleanup.
     await git(root, ["worktree", "add", "--detach", target, "HEAD"]);
     this.svc.bindBranchWorkspace(branch.id, { mode: "worktree", path: target });
+    // E4a: the worktree was created FROM root's HEAD, and `worktree add` leaves
+    // root's HEAD untouched — so reading it now still yields the creation-time
+    // commit. Only recorded on (and ever written on) this first bind.
+    await this.recordBaseRef(branch.id, root);
     return target;
+  }
+
+  /**
+   * E4a baseline (docs/14 §4.2): record the workspace's HEAD as baseRef, ONCE.
+   * The domain write is guarded by `base_ref IS NULL`, so a restart or re-bind
+   * cannot move the "before work began" point. Best-effort: a non-Git workspace
+   * (ordinary folder, or a repo with no commit) simply has no baseline.
+   */
+  private async recordBaseRef(branchId: string, cwd: string): Promise<void> {
+    let head = "";
+    try {
+      head = await git(cwd, ["rev-parse", "HEAD"]);
+    } catch {
+      return; // not a Git repo, or no first commit — no baseline to record
+    }
+    if (head) this.svc.recordBaseRef(branchId, head);
   }
 
   async status(branchId: string) {

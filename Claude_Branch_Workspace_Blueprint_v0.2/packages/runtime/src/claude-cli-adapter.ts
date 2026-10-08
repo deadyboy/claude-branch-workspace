@@ -20,6 +20,9 @@ interface GatewayEnv {
 // Live gateway observed in Phase 0 (15722), not settings' dead 15721.
 // Overridable via CBW_BASE_URL / CBW_AUTH_TOKEN for environment portability.
 function readGatewayEnv(): GatewayEnv {
+  if (process.env.CBW_BASE_URL !== undefined && process.env.CBW_AUTH_TOKEN !== undefined) {
+    return { baseUrl: process.env.CBW_BASE_URL, authToken: process.env.CBW_AUTH_TOKEN };
+  }
   const settingsPath = join(homedir(), ".claude", "settings.json");
   let settingsEnv: Record<string, string> = {};
   try {
@@ -40,6 +43,13 @@ interface ManagedSession {
   cwd: string;
   running: boolean;
 }
+
+// Exact product MCP permissions for normal turns; bootstrap remains tool-free.
+const PRODUCT_MCP_ALLOWED_TOOLS = [
+  "create_branch_from_node", "send_message", "list_branches", "get_branch_status",
+  "interrupt_branch", "archive_branch", "query_execution_status", "get_turn_result",
+  "create_task", "run_task", "get_task", "register_artifact",
+].map(name => `mcp__cbw-control__${name}`).join(",");
 
 // Read-only lookup: SessionManager is the sole writer of runtime mappings.
 // Session keys and branch IDs are distinct immutable identities.
@@ -92,7 +102,8 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     private persistence?: RuntimePersistence,
     private turnTimeoutMs = 600_000,
     /** Timeout for the session warm-up (start) turn, which has no subagents. */
-    private startTurnTimeoutMs = 120_000
+    private startTurnTimeoutMs = 120_000,
+    private executionContext?: (sessionKey: string) => { mcpConfig: string; systemContext: string } | null
   ) {
     const gw = readGatewayEnv();
     this.baseUrl = gw.baseUrl;
@@ -304,7 +315,9 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     if (s.running) throw new Error("session invocation already running");
     s.running = true;
     try {
-      yield* this.spawnOnce(["--resume", s.externalSessionId, "--verbose", "--output-format", "stream-json", input.text], s.cwd, sessionId);
+      const context = this.executionContext?.(sessionId);
+      const mcpArgs = context ? ["--strict-mcp-config", "--mcp-config", context.mcpConfig, "--allowedTools", PRODUCT_MCP_ALLOWED_TOOLS, "--append-system-prompt", context.systemContext] : [];
+      yield* this.spawnOnce(["--resume", s.externalSessionId, ...mcpArgs, "--verbose", "--output-format", "stream-json", input.text], s.cwd, sessionId);
     } finally { s.running = false; }
   }
   async forkFromHead(sessionId: string, input: ForkInput): Promise<RuntimeSession> {

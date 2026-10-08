@@ -2,7 +2,7 @@
 // Bootstrap and refreshes use the Zustand store as the live source of truth;
 // callbacks held by the WebSocket therefore never close over an old render.
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore } from "./store/useStore";
 import { api } from "./api/client";
 import { WsStream } from "./lib/ws";
@@ -10,6 +10,11 @@ import { ConversationTree } from "./components/ConversationTree";
 import { ChatPane } from "./components/ChatPane";
 import { AgentMonitor } from "./components/AgentMonitor";
 import { Timeline } from "./components/Timeline";
+import { ProjectHub } from "./components/ProjectHub";
+import { ConversationGraphView, BranchBreadcrumb } from "./components/ConversationGraphView";
+import { ChangesPanel } from "./components/ChangesPanel";
+import { TeamView } from "./components/TeamView";
+import { ProjectGraphView } from "./components/ProjectGraphView";
 
 const PENDING_REFRESH_FAST_INTERVAL_MS = 1_500;
 const PENDING_REFRESH_SLOW_INTERVAL_MS = 5_000;
@@ -20,8 +25,13 @@ const STARTUP_RETRY_ATTEMPTS = 10;
 
 export function App() {
   const st = useStore();
+  const [hubOpen, setHubOpen] = useState(false);
+  // Conversation | Graph | Project are the three views from the plan (S0 §3.2).
+  const [view, setView] = useState<"conversation" | "graph" | "results" | "team" | "project">("conversation");
+  const [highlightNodeId, setHighlightNodeId] = useState<string | null>(null);
+  const openProjectRequestRef = useRef(0);
   const streamRef = useRef<WsStream | null>(null);
-  const refreshTokenRef = useRef(0);
+  const branchRefreshSequenceRef = useRef(new Map<string, number>());
   const refreshAllTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const refreshAgainRef = useRef(false);
@@ -66,54 +76,29 @@ export function App() {
     if (bootstrapInFlightRef.current) return bootstrapInFlightRef.current;
     const run = (async () => {
       try {
+        // The execution host is a first-class fact (S0 §3); read it before any
+        // path is interpreted so the UI can always say where work will run.
+        try {
+          useStore.getState().setHost(await api.host());
+        } catch {
+          // A pre-S1 control plane has no /api/host; the hub degrades to an
+          // explicit "host unavailable" label rather than implying local exec.
+        }
+
         let projects = await api.listProjects();
         if (projects.length === 0) {
+          // No project yet: create one rooted at the execution host's cwd. The
+          // user can add more (with real paths) from the Project Hub.
           projects = [await api.createProject("Default")];
         }
         useStore.getState().setProjects(projects);
-        const project = projects[0];
-        useStore.getState().setActiveProject(project.id);
 
-        let branches = await api.listBranches(project.id);
-        if (branches.length === 0) {
-          const created = await api.createRoot(project.id, "Main", "shared");
-          branches = [created.branch];
-        }
-        useStore.getState().setBranches(branches);
-        const main = branches.find((branch) => branch.status === "active") ?? branches[0];
-        if (main) {
-          useStore.getState().setActiveBranch(main.id);
-          await refreshBranchData(main.id);
-        }
-
-        try {
-          useStore.getState().setAttention(await api.listAttention());
-        } catch {
-          // Attention is optional during an early runtime start.
-        }
-        // This is a project-scoped cursor. Branch-scoped events would omit
-        // events from sibling branches and cannot seed the project WS stream.
-        const events = await api.eventsAfter(project.id, 0);
-        useStore.getState().seedTimeline(events.events);
-
-        const stream = new WsStream(project.id, (frame) => {
-          useStore.getState().applyFrame(frame);
-          // Coalesce the burst of lifecycle/tool frames into one bounded
-          // refresh. Every frame still reaches the timeline immediately.
-          requestRefreshAll();
-          if (frame.type === "session.stopped" && frame.branchId) {
-            settleRefresh(frame.branchId);
-          }
-          syncPendingRefresh();
-        }, (status) => {
-          useStore.getState().setSocketStatus(status);
-        }, () => {
-          requestRefreshAll(0);
-        });
-        streamRef.current?.stop();
-        streamRef.current = stream;
-        stream.start(events.latestSeqRel);
-        stopStartupRetry();
+        // Restore the last project the user opened so a refresh returns them to
+        // where they were (E1). Fall back to the first project on a fresh start
+        // or when the remembered one no longer exists.
+        const remembered = readRememberedProject();
+        const project = projects.find((p) => p.id === remembered) ?? projects[0];
+        await openProject(project.id, { seedStream: true });
       } catch (error) {
         console.error("bootstrap failed", error);
         // A temporary failure after a project/node has been created must not
@@ -139,6 +124,103 @@ export function App() {
     }, delay);
   }
 
+  /**
+   * Open a project: clear every project-scoped slice, load its branches, pick a
+   * default branch, and (re)start the WS stream against the new project's
+   * cursor.
+   *
+   * Switching projects MUST NOT let one project's branches, conversations, runs
+   * or events appear under another (E1 pass condition), so this always resets
+   * before loading. `seedStream:false` is used when the caller only wants the
+   * data loaded (the hub preview path) without disturbing the live socket.
+   */
+  async function openProject(projectId: string, opts: { seedStream: boolean }): Promise<void> {
+    const requestId = ++openProjectRequestRef.current;
+    const previousProjectId = useStore.getState().activeProjectId;
+    if (previousProjectId !== projectId) {
+      // Drop the old project's state and stop its stream before the new load,
+      // so stale frames cannot land on the new project's panes.
+      useStore.getState().resetProjectScopedState();
+      streamRef.current?.stop();
+      streamRef.current = null;
+    }
+    useStore.getState().setActiveProject(projectId);
+    rememberProject(projectId);
+
+    let branches = await api.listBranches(projectId);
+    if (requestId !== openProjectRequestRef.current) return;
+    if (branches.length === 0) {
+      const created = await api.createRoot(projectId, "Main", "shared");
+      if (requestId !== openProjectRequestRef.current) return;
+      branches = [created.branch];
+    }
+    useStore.getState().setBranches(branches);
+    const main = branches.find((branch) => branch.status === "active") ?? branches[0];
+    if (main) {
+      useStore.getState().setActiveBranch(main.id);
+      await refreshBranchData(main.id);
+    }
+    if (requestId !== openProjectRequestRef.current) return;
+
+    try {
+      useStore.getState().setAttention(await api.listAttention());
+    } catch {
+      // Attention is optional during an early runtime start.
+    }
+
+    if (!opts.seedStream) return;
+
+    // This is a project-scoped cursor. Branch-scoped events would omit events
+    // from sibling branches and cannot seed the project WS stream.
+    const events = await api.eventsAfter(projectId, 0);
+    if (requestId !== openProjectRequestRef.current) return;
+    useStore.getState().seedTimeline(events.events);
+
+    const stream = new WsStream(projectId, (frame) => {
+      // Check BEFORE applying: a frame from a project we have since left must
+      // not touch current state at all (E1: no cross-project event bleed).
+      if (frame.projectId && frame.projectId !== useStore.getState().activeProjectId) return;
+      useStore.getState().applyFrame(frame);
+      // Coalesce the burst of lifecycle/tool frames into one bounded refresh.
+      // Every frame still reaches the timeline immediately.
+      requestRefreshAll();
+      if (frame.type === "session.stopped" && frame.branchId) {
+        settleRefresh(frame.branchId);
+      }
+      syncPendingRefresh();
+    }, (status) => {
+      useStore.getState().setSocketStatus(status);
+    }, () => {
+      requestRefreshAll(0);
+    });
+    streamRef.current?.stop();
+    streamRef.current = stream;
+    stream.start(events.latestSeqRel);
+    // `eventsAfter` closes the websocket gap for the timeline, but it does not
+    // rebuild the active branch conversation. A first send can finish before
+    // this socket is attached, so reconcile the branch after the cursor is live.
+    const activeBranchAfterSeed = useStore.getState().activeBranchId;
+    if (activeBranchAfterSeed) void refreshBranchData(activeBranchAfterSeed);
+    stopStartupRetry();
+  }
+
+  /** User-initiated switch: same path as open, but restarts the stream. */
+  async function switchProject(projectId: string): Promise<void> {
+    try {
+      await openProject(projectId, { seedStream: true });
+    } catch (error) {
+      console.error("open project failed", error);
+    }
+  }
+
+  function openConversation(branchId: string, nodeId?: string): void {
+    const branch = useStore.getState().branches.find((item) => item.id === branchId);
+    if (!branch || branch.projectId !== useStore.getState().activeProjectId) return;
+    setHighlightNodeId(nodeId ?? null);
+    useStore.getState().setActiveBranch(branchId);
+    setView("conversation");
+  }
+
   async function refreshAll(): Promise<void> {
     if (refreshInFlightRef.current) {
       refreshAgainRef.current = true;
@@ -149,9 +231,13 @@ export function App() {
       if (!projectId) return;
       try {
         const branches = await api.listBranches(projectId);
+        // A refresh started before a project switch must not install the old
+        // project's branches under the new one (E1: no cross-project bleed).
+        if (useStore.getState().activeProjectId !== projectId) return;
         useStore.getState().setBranches(branches);
         try {
-          useStore.getState().setAttention(await api.listAttention());
+          const cards = await api.listAttention();
+          if (useStore.getState().activeProjectId === projectId) useStore.getState().setAttention(cards);
         } catch {
           // Keep branch/conversation refresh useful when attention is down.
         }
@@ -186,7 +272,14 @@ export function App() {
   }
 
   async function refreshBranchData(branchId: string): Promise<void> {
-    const token = ++refreshTokenRef.current;
+    const before = useStore.getState();
+    const projectId = before.activeProjectId;
+    const branch = before.branches.find((item) => item.id === branchId);
+    if (!projectId || !branch || branch.projectId !== projectId) return;
+    const openProjectRequestId = openProjectRequestRef.current;
+    const requestKey = `${projectId}\u0000${branchId}`;
+    const requestSequence = (branchRefreshSequenceRef.current.get(requestKey) ?? 0) + 1;
+    branchRefreshSequenceRef.current.set(requestKey, requestSequence);
     try {
       const [conversation, nodes, runs, workspace] = await Promise.all([
         api.conversation(branchId),
@@ -194,8 +287,14 @@ export function App() {
         api.agentRuns(branchId),
         api.workspace(branchId).catch(() => null),
       ]);
-      if (token !== refreshTokenRef.current || disposedRef.current) return;
       const current = useStore.getState();
+      if (
+        disposedRef.current ||
+        openProjectRequestId !== openProjectRequestRef.current ||
+        current.activeProjectId !== projectId ||
+        branchRefreshSequenceRef.current.get(requestKey) !== requestSequence ||
+        !current.branches.some((item) => item.id === branchId && item.projectId === projectId)
+      ) return;
       current.setConversation(branchId, conversation);
       current.setNodes(branchId, nodes);
       current.setAgentRuns(branchId, runs);
@@ -280,6 +379,7 @@ export function App() {
 
   const project = st.projects.find((item) => item.id === st.activeProjectId) ?? st.projects[0];
   const socketStatus = st.socketStatus;
+  const host = st.host;
 
   return (
     <div className="app">
@@ -289,19 +389,115 @@ export function App() {
         <span className="socket-txt">
           {socketStatus === "open" ? "connected" : socketStatus === "connecting" ? "connecting…" : "offline"}
         </span>
-        {project && (
-          <span className="project-name" title={project.rootPath ?? undefined}>
-            {project.name}
-            <span className="project-root">{project.rootPath ?? "root path not set"}</span>
-          </span>
-        )}
+        {/* Execution host: always visible so "where will this run?" never needs
+            guessing (E1). Combined with the current project's root path below. */}
+        <span className="host-tag" title={host ? `${host.platform} · ${host.cwd}` : "execution host unavailable"}>
+          {host ? `on ${host.hostname}` : "host unknown"}
+        </span>
+        <button className="project-switch" onClick={() => setHubOpen(true)} title="Switch or add project">
+          {project ? project.name : "No project"}
+          <span className="project-root">{project?.rootPath ?? "root path not set"}</span>
+          <span className="caret">▾</span>
+        </button>
+        <div className="view-tabs" role="tablist" aria-label="View">
+          <button
+            role="tab"
+            aria-selected={view === "conversation"}
+            className={view === "conversation" ? "active" : ""}
+            onClick={() => setView("conversation")}
+          >
+            Conversation
+          </button>
+          <button
+            role="tab"
+            aria-selected={view === "graph"}
+            className={view === "graph" ? "active" : ""}
+            onClick={() => setView("graph")}
+            title="See real turns, forks and their origins"
+          >
+            Graph
+          </button>
+          <button
+            role="tab"
+            aria-selected={view === "results"}
+            className={view === "results" ? "active" : ""}
+            onClick={() => setView("results")}
+            title="See what this branch's work changed"
+          >
+            Results
+          </button>
+          <button
+            role="tab"
+            aria-selected={view === "team"}
+            className={view === "team" ? "active" : ""}
+            onClick={() => setView("team")}
+            title="Dispatch work and watch it run"
+          >
+            Team
+          </button>
+          <button
+            role="tab"
+            aria-selected={view === "project"}
+            className={view === "project" ? "active" : ""}
+            onClick={() => setView("project")}
+            title="Browse files, tasks, artifacts, and their recorded sources"
+          >
+            Project
+          </button>
+        </div>
       </header>
+      <BranchBreadcrumb branch={st.branches.find((b) => b.id === st.activeBranchId)} />
       <div className="layout">
-        <ConversationTree />
-        <ChatPane />
-        <AgentMonitor />
+        {view === "conversation" ? (
+          <>
+            <ConversationTree />
+            <ChatPane highlightNodeId={highlightNodeId} />
+            <AgentMonitor />
+          </>
+        ) : view === "graph" ? (
+          <ConversationGraphView onOpenConversation={openConversation} />
+        ) : view === "team" ? (
+          <TeamView onOpenBranch={(branchId) => openConversation(branchId)} />
+        ) : view === "project" ? (
+          <ProjectGraphView onOpenConversation={(branchId, nodeId) => openConversation(branchId, nodeId)} />
+        ) : (
+          <div className="pane results">
+            {st.activeBranchId ? (
+              <ChangesPanel branchId={st.activeBranchId} onOpenConversation={(branchId) => openConversation(branchId)} />
+            ) : (
+              <div className="empty">Select a branch to review its results.</div>
+            )}
+          </div>
+        )}
       </div>
       <Timeline />
+      {hubOpen && (
+        <ProjectHub
+          onClose={() => setHubOpen(false)}
+          onOpenProject={switchProject}
+        />
+      )}
     </div>
   );
+}
+
+// Remembering the open project across reloads is what makes E1's "refresh
+// restores the current project" observable. Failure to persist (private mode,
+// quota) is non-fatal — the app just falls back to the first project.
+const ACTIVE_PROJECT_KEY = "cbw.activeProjectId";
+
+function readRememberedProject(): string | null {
+  try {
+    return window.localStorage.getItem(ACTIVE_PROJECT_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function rememberProject(projectId: string): void {
+  try {
+    window.localStorage.setItem(ACTIVE_PROJECT_KEY, projectId);
+  } catch {
+    // Non-fatal: the session still works, it just will not restore on reload.
+  }
 }

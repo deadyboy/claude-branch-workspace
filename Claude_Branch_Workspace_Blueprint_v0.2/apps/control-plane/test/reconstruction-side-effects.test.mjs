@@ -111,6 +111,13 @@ test("g2: fake flags ZERO tool/bash/mcp invocations during reconstruction", asyn
   assert.ok(seedText.includes("T1"), "seed includes the prior transcript (user side)");
   assert.ok(seedText.includes("echo for: T1"), "seed includes the prior transcript (assistant side)");
   assert.match(seedText, /Do NOT re-run any command/, "ack instruction is present in the seed");
+  assert.match(seedText, /Reply with exactly TRANSCRIPT_ACK and nothing else\./,
+    "the actual adapter seed requires an exact short acknowledgement");
+  assert.match(seedText, /Do not summarize or explain the transcript\./,
+    "the actual adapter seed explicitly forbids a long recap");
+  assert.equal(seedText.split("--- prior transcript ---\n")[1],
+    "user: T1\n\nassistant: echo for: T1\n\nuser: T2\n\nassistant: echo for: T2",
+    "the forwarded seed retains the complete history and roles through the fork point");
   close();
 });
 

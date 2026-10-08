@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { Repository } from "./repository.js";
 import type {
   AgentRun,
+  ApplyOperation,
+  ApplyOperationStatus,
+  Artifact,
+  ArtifactKind,
   Branch,
   BranchContextSnapshot,
   ConversationNode,
@@ -12,6 +16,9 @@ import type {
   Message,
   Project,
   RuntimeSession,
+  Task,
+  TaskAttempt,
+  TaskStatus,
 } from "./types.js";
 
 export class DomainError extends Error {
@@ -78,6 +85,23 @@ export class DomainService {
     return this.repo.listProjects();
   }
 
+  /**
+   * Update a project's mutable fields (name / rootPath), preserving its
+   * immutable identity (id, createdAt). Only the fields the caller supplies are
+   * changed; the others keep their stored values. Returns the refreshed row.
+   */
+  updateProject(id: string, fields: { name?: string; rootPath?: string | null }): Project {
+    const existing = this.repo.getProject(id);
+    if (!existing) throw new DomainError(`project ${id} not found`);
+    if (fields.name !== undefined && !fields.name) throw new DomainError("project name must not be empty");
+    this.repo.updateProject(id, {
+      name: fields.name,
+      rootPath: fields.rootPath,
+      updatedAt: this.now(),
+    });
+    return this.repo.getProject(id) as Project;
+  }
+
   // ---- branches ----
   private requireOpen(b: Branch): void {
     if (b.status !== "active") {
@@ -101,6 +125,7 @@ export class DomainService {
       runtimeSessionId: null,
       runtimeProfileId: null,
       workspacePath: null,
+      baseRef: null, // recorded on first bind (E4a) — never at creation
       status: "active",
       createdAt: this.now(),
       archivedAt: null,
@@ -140,6 +165,7 @@ export class DomainService {
       runtimeSessionId: null,
       runtimeProfileId: null,
       workspacePath: null,
+      baseRef: null, // recorded on first bind (E4a) — never at creation
       status: "active",
       createdAt: this.now(),
       archivedAt: null,
@@ -179,6 +205,19 @@ export class DomainService {
     }
     if (!input.path && branch.status !== "archived") throw new DomainError("only archived workspaces can be detached");
     this.repo.bindBranchWorkspace(branchId, input.mode, input.path, input.originStrategy);
+    return this.getBranch(branchId)!;
+  }
+
+  /**
+   * Record the E4a baseline commit for a branch, once. The repository write is
+   * guarded (base_ref IS NULL), so repeated calls after the first are no-ops and
+   * the "before work began" value is preserved across restarts. Returns the
+   * refreshed branch.
+   */
+  recordBaseRef(branchId: string, baseRef: string): Branch {
+    const branch = this.getBranch(branchId);
+    if (!branch) throw new DomainError(`branch ${branchId} not found`);
+    this.repo.setBaseRef(branchId, baseRef);
     return this.getBranch(branchId)!;
   }
 
@@ -288,9 +327,13 @@ export class DomainService {
   }
 
   captureBranchContext(branch: Branch, forkNode: ConversationNode): void {
-    const lineage: ConversationNode[] = [];
-    this.collectLineage(forkNode, lineage);
-    lineage.reverse();
+    // Seed the reconstruction snapshot from the FULL ancestor chain, using the
+    // SAME traversal the UI reads (inheritedNodes). The previous implementation
+    // walked only same-branch `parentNodeId` links, so a fork-of-fork (A1 from A)
+    // dropped the whole prefix A inherited from Main: the UI showed 6 inherited
+    // items while the model seed carried 2. Sharing one traversal is what keeps
+    // them from diverging again (E2 "拓扑和有效上下文逐项一致").
+    const lineage = this.inheritedNodes(branch);
 
     const visibleMessages: { role: "user" | "assistant"; content: string }[] = [];
     for (const n of lineage) {
@@ -601,33 +644,14 @@ export class DomainService {
     const branch = this.repo.getBranch(branchId);
     if (!branch) throw new DomainError(`branch ${branchId} not found`);
 
+    // Same traversal as the reconstruction seed (inheritedNodes): the UI and the
+    // model read the same ordered list, so they cannot disagree about what a
+    // branch inherits. Origin is decided per node by which branch owns it.
     const items: EffectiveConversationItem[] = [];
-
-    // Walk ancestors (deepest first), reverse at the end so root->target.
-    const chain: Branch[] = [];
-    const seen = new Set<string>();
-    let cur: Branch | null = branch;
-    while (cur && !seen.has(cur.id)) {
-      seen.add(cur.id);
-      chain.unshift(cur);
-      cur = cur.parentBranchId ? this.repo.getBranch(cur.parentBranchId) : null;
+    for (const n of this.inheritedNodes(branch)) {
+      const origin = n.branchId === branch.id ? "local" : "inherited";
+      items.push(...this.nodeItems(n.branchId, n, origin));
     }
-
-    for (let i = 0; i < chain.length - 1; i++) {
-      const anc = chain[i];
-      const nodes = this.repo.listNodesByBranch(anc.id);
-      // Include up to and including the fork point (target child branch's forkFromNodeId).
-      const childBranch = chain[i + 1];
-      const stopAt = childBranch.forkFromNodeId;
-      for (const n of nodes) {
-        items.push(...this.nodeItems(anc.id, n, "inherited"));
-        if (stopAt && n.id === stopAt) break;
-      }
-    }
-
-    const local = this.repo.listNodesByBranch(branch.id);
-    for (const n of local) items.push(...this.nodeItems(branch.id, n, "local"));
-
     return items;
   }
 
@@ -672,12 +696,355 @@ export class DomainService {
     return { cancelledNodes, interruptedSessions };
   }
 
-  private collectLineage(node: ConversationNode, acc: ConversationNode[]): void {
-    acc.push(node);
-    if (node.parentNodeId) {
-      const p = this.repo.getNode(node.parentNodeId);
-      if (p && p.branchId === node.branchId) this.collectLineage(p, acc);
+  // ---- tasks / attempts / artifacts (S4, docs/14 §5) ----
+  //
+  // Semantics freeze (E5):
+  //   • A Task is durable; Task.status is an AGGREGATE view of its attempts.
+  //   • Each attempt is its own row; a retry APPENDS a new attempt and never
+  //     rewrites an old one — old attempts are always retained ("重试不丢旧记录").
+  //   • branchId is validated against the task's project when supplied; a task
+  //     may legitimately have branchId === null (UI/MCP binds it later). We do
+  //     NOT auto-create a branch here.
+
+  /** Validate that a branch (if given) exists and belongs to `projectId`. */
+  private requireBranchInProject(branchId: string, projectId: string): void {
+    const b = this.repo.getBranch(branchId);
+    if (!b) throw new DomainError(`branch ${branchId} not found`);
+    if (b.projectId !== projectId) {
+      throw new DomainError(`branch ${branchId} belongs to project ${b.projectId}, not ${projectId}`);
     }
+  }
+
+  createTask(input: {
+    projectId: string;
+    title: string;
+    instructions: string;
+    branchId?: string | null;
+    role?: string | null;
+    status?: TaskStatus;
+  }): Task {
+    const project = this.repo.getProject(input.projectId);
+    if (!project) throw new DomainError(`project ${input.projectId} not found`);
+    if (!input.title) throw new DomainError("task title must not be empty");
+    if (!input.instructions) throw new DomainError("task instructions must not be empty");
+    if (input.branchId) this.requireBranchInProject(input.branchId, input.projectId);
+
+    const at = this.now();
+    const t: Task = {
+      id: randomUUID(),
+      projectId: input.projectId,
+      branchId: input.branchId ?? null,
+      title: input.title,
+      instructions: input.instructions,
+      role: input.role ?? null,
+      // Default "queued": an unscheduled task is waiting for a slot, not running.
+      status: input.status ?? "queued",
+      createdAt: at,
+      updatedAt: at,
+    };
+    this.repo.insertTask(t);
+    return this.repo.getTask(t.id) as Task;
+  }
+
+  getTask(id: string): Task | null {
+    return this.repo.getTask(id);
+  }
+
+  listTasksByProject(projectId: string): Task[] {
+    return this.repo.listTasksByProject(projectId);
+  }
+
+  /** Edit task fields (E5 "角色和名称可编辑"). Identity is preserved. */
+  updateTask(id: string, fields: { title?: string; instructions?: string; role?: string | null; branchId?: string | null }): Task {
+    const t = this.repo.getTask(id);
+    if (!t) throw new DomainError(`task ${id} not found`);
+    if (fields.title !== undefined && !fields.title) throw new DomainError("task title must not be empty");
+    if (fields.instructions !== undefined && !fields.instructions) throw new DomainError("task instructions must not be empty");
+    if (fields.branchId) this.requireBranchInProject(fields.branchId, t.projectId);
+    this.repo.updateTask(id, {
+      title: fields.title,
+      instructions: fields.instructions,
+      role: fields.role,
+      branchId: fields.branchId,
+      updatedAt: this.now(),
+    });
+    return this.repo.getTask(id) as Task;
+  }
+
+  /** Explicit aggregate-status set (e.g. cancel the whole task). */
+  updateTaskStatus(id: string, status: TaskStatus): Task {
+    const t = this.repo.getTask(id);
+    if (!t) throw new DomainError(`task ${id} not found`);
+    this.repo.updateTask(id, { status, updatedAt: this.now() });
+    return this.repo.getTask(id) as Task;
+  }
+
+  /**
+   * Append a NEW attempt to a task and refresh the task's aggregate status.
+   * Retries call this again — they never reuse or overwrite an earlier attempt.
+   */
+  addTaskAttempt(input: {
+    taskId: string;
+    branchId?: string | null;
+    nodeId?: string | null;
+    agentRunId?: string | null;
+    status?: TaskStatus;
+    resultRef?: string | null;
+    error?: string | null;
+    startedAt?: string | null;
+  }): TaskAttempt {
+    const task = this.repo.getTask(input.taskId);
+    if (!task) throw new DomainError(`task ${input.taskId} not found`);
+    // An attempt may run on the task's branch or an explicit one; validate when given.
+    const branchId = input.branchId ?? task.branchId;
+    if (branchId) this.requireBranchInProject(branchId, task.projectId);
+    if (input.nodeId) {
+      const node = this.repo.getNode(input.nodeId);
+      if (!node || node.projectId !== task.projectId || node.branchId !== branchId) throw new DomainError("attempt node binding must match task project and branch");
+    }
+    if (input.agentRunId) {
+      const run = this.repo.getAgentRun(input.agentRunId);
+      if (!run || run.ownerBranchId !== branchId || run.ownerNodeId !== (input.nodeId ?? null)) throw new DomainError("attempt run binding must match its execution node and branch");
+    }
+
+    const a: TaskAttempt = {
+      id: randomUUID(),
+      taskId: input.taskId,
+      branchId: branchId ?? null,
+      nodeId: input.nodeId ?? null,
+      agentRunId: input.agentRunId ?? null,
+      status: input.status ?? "running",
+      resultRef: input.resultRef ?? null,
+      error: input.error ?? null,
+      startedAt: input.startedAt ?? this.now(),
+      endedAt: null,
+    };
+    this.repo.transaction(() => {
+      this.repo.insertTaskAttempt(a);
+      if (a.status === "running" || a.status === "queued") {
+        this.repo.updateTask(task.id, { status: a.status, updatedAt: this.now() });
+      }
+    });
+    return this.repo.getTaskAttempt(a.id) as TaskAttempt;
+  }
+
+  startTaskAttempt(id: string): TaskAttempt {
+    const a = this.repo.getTaskAttempt(id);
+    if (!a) throw new DomainError(`task attempt ${id} not found`);
+    this.repo.transaction(() => { this.repo.startTaskAttempt(id); this.recomputeTaskStatus(a.taskId); });
+    return this.repo.getTaskAttempt(id)!;
+  }
+  attachTaskAttemptRun(id: string, runId: string): void {
+    const a = this.repo.getTaskAttempt(id);
+    const run = this.repo.getAgentRun(runId);
+    if (!a || !run || run.ownerNodeId !== a.nodeId || run.ownerBranchId !== a.branchId) {
+      throw new DomainError("attempt run binding must match its execution node and branch");
+    }
+    this.repo.attachTaskAttemptRun(id, runId);
+  }
+  /**
+   * Terminal transition for ONE attempt, then re-aggregate the task. The attempt
+   * row is preserved (it is only marked terminal, never deleted/reused).
+   */
+  completeTaskAttempt(
+    attemptId: string,
+    input: { status: Extract<TaskStatus, "completed" | "failed" | "cancelled">; resultRef?: string | null; error?: string | null }
+  ): TaskAttempt {
+    const attempt = this.repo.getTaskAttempt(attemptId);
+    if (!attempt) throw new DomainError(`task attempt ${attemptId} not found`);
+    const at = this.now();
+    this.repo.transaction(() => {
+      this.repo.completeTaskAttempt(attemptId, input.status, input.resultRef ?? null, input.error ?? null, at);
+      this.recomputeTaskStatus(attempt.taskId);
+    });
+    return this.repo.getTaskAttempt(attemptId) as TaskAttempt;
+  }
+
+  listTaskAttempts(taskId: string): TaskAttempt[] {
+    return this.repo.listTaskAttempts(taskId);
+  }
+
+  getTaskAttempt(id: string): TaskAttempt | null {
+    return this.repo.getTaskAttempt(id);
+  }
+
+  /**
+   * Aggregate task status from its attempts. A live (running/queued) attempt
+   * dominates; otherwise the MOST RECENT attempt's terminal status wins — so a
+   * task that failed once and then succeeded via a retry reads "completed",
+   * while the failed attempt row remains readable in the history.
+   */
+  private recomputeTaskStatus(taskId: string): void {
+    const attempts = this.repo.listTaskAttempts(taskId);
+    if (attempts.length === 0) return;
+    let aggregate: TaskStatus;
+    if (attempts.some((a) => a.status === "running")) aggregate = "running";
+    else if (attempts.some((a) => a.status === "queued")) aggregate = "queued";
+    else aggregate = attempts[attempts.length - 1].status;
+    this.repo.updateTask(taskId, { status: aggregate, updatedAt: this.now() });
+  }
+
+  createArtifact(input: {
+    projectId: string;
+    originBranchId?: string | null;
+    originNodeId?: string | null;
+    originTaskId?: string | null;
+    kind: ArtifactKind;
+    path?: string | null;
+    summary?: string | null;
+    id?: string;
+  }): Artifact {
+    const project = this.repo.getProject(input.projectId);
+    if (!project) throw new DomainError(`project ${input.projectId} not found`);
+    if (input.originTaskId) {
+      const t = this.repo.getTask(input.originTaskId);
+      if (!t) throw new DomainError(`task ${input.originTaskId} not found`);
+      if (t.projectId !== input.projectId) {
+        throw new DomainError(`task ${input.originTaskId} belongs to project ${t.projectId}, not ${input.projectId}`);
+      }
+    }
+    if (input.originBranchId) this.requireBranchInProject(input.originBranchId, input.projectId);
+    if (input.originNodeId) {
+      const node = this.repo.getNode(input.originNodeId);
+      if (!node || node.projectId !== input.projectId || (input.originBranchId && node.branchId !== input.originBranchId)) throw new DomainError("artifact node binding must match its project and origin branch");
+    }
+    const a: Artifact = {
+      id: input.id ?? randomUUID(),
+      projectId: input.projectId,
+      originBranchId: input.originBranchId ?? null,
+      originNodeId: input.originNodeId ?? null,
+      originTaskId: input.originTaskId ?? null,
+      kind: input.kind,
+      path: input.path ?? null,
+      summary: input.summary ?? null,
+      createdAt: this.now(),
+    };
+    this.repo.insertArtifact(a);
+    return this.repo.getArtifact(a.id) as Artifact;
+  }
+
+  getArtifact(id: string): Artifact | null {
+    return this.repo.getArtifact(id);
+  }
+
+  listArtifacts(projectId: string): Artifact[] {
+    return this.repo.listArtifactsByProject(projectId);
+  }
+
+  listArtifactsByTask(taskId: string): Artifact[] {
+    return this.repo.listArtifactsByTask(taskId);
+  }
+
+  // ---- apply operations (E4b, docs/14 §4.3) ----
+  //
+  // An apply is recorded as a DURABLE LEDGER ROW before any file is touched, so
+  // a mid-apply crash leaves evidence (which paths landed, which did not, where
+  // the backup lives) instead of an unexplained target. The row id is a
+  // DETERMINISTIC hash computed by the caller (source+target descriptor), which
+  // is what makes a repeated click detectable: the second call finds the same id.
+
+  /** Create the ledger row (status "applying"). Returns it for the caller to run. */
+  startApplyOperation(input: {
+    id: string;
+    taskId: string;
+    projectId: string;
+    branchId: string | null;
+    targetPath: string;
+    baseRef: string | null;
+    confirmToken: string;
+  }): ApplyOperation {
+    const task = this.repo.getTask(input.taskId);
+    if (!task) throw new DomainError(`task ${input.taskId} not found`);
+    const existing = this.repo.getApplyOperation(input.id);
+    if (existing) throw new DomainError(`apply operation ${input.id} already exists`);
+    const at = this.now();
+    const o: ApplyOperation = {
+      id: input.id,
+      taskId: input.taskId,
+      projectId: input.projectId,
+      branchId: input.branchId,
+      targetPath: input.targetPath,
+      baseRef: input.baseRef,
+      confirmToken: input.confirmToken,
+      status: "applying",
+      appliedJson: "[]",
+      pendingJson: "[]",
+      targetRestored: false,
+      backupDir: null,
+      error: null,
+      createdAt: at,
+      updatedAt: at,
+    };
+    this.repo.insertApplyOperation(o);
+    return this.repo.getApplyOperation(o.id) as ApplyOperation;
+  }
+
+  getApplyOperation(id: string): ApplyOperation | null {
+    return this.repo.getApplyOperation(id);
+  }
+
+  listApplyOperationsByTask(taskId: string): ApplyOperation[] {
+    return this.repo.listApplyOperationsByTask(taskId);
+  }
+
+  /** Update the ledger row after a (possibly partial/failed) apply attempt. */
+  updateApplyOperation(
+    id: string,
+    fields: {
+      status?: ApplyOperationStatus;
+      applied?: string[];
+      pending?: string[];
+      targetRestored?: boolean;
+      backupDir?: string | null;
+      error?: string | null;
+    }
+  ): ApplyOperation {
+    const existing = this.repo.getApplyOperation(id);
+    if (!existing) throw new DomainError(`apply operation ${id} not found`);
+    this.repo.updateApplyOperation(id, {
+      status: fields.status,
+      appliedJson: fields.applied === undefined ? undefined : JSON.stringify(fields.applied),
+      pendingJson: fields.pending === undefined ? undefined : JSON.stringify(fields.pending),
+      targetRestored: fields.targetRestored,
+      backupDir: fields.backupDir,
+      error: fields.error,
+      updatedAt: this.now(),
+    });
+    return this.repo.getApplyOperation(id) as ApplyOperation;
+  }
+
+  /**
+   * The ancestor nodes a branch inherits, oldest first: for each ancestor branch
+   * (root → parent) the nodes up to AND INCLUDING the child branch's fork point,
+   * then the branch's own nodes. This is the single source of truth for BOTH the
+   * UI read model (getEffectiveConversation) and the reconstruction seed
+   * (captureBranchContext) — sharing it is what guarantees the model and the UI
+   * can never disagree about a branch's inherited context.
+   *
+   * Cycle-guarded: a re-parented / corrupted chain with a branch cycle stops at
+   * the first repeat instead of recursing forever.
+   */
+  private inheritedNodes(branch: Branch): ConversationNode[] {
+    const out: ConversationNode[] = [];
+    const chain: Branch[] = [];
+    const seen = new Set<string>();
+    let cur: Branch | null = branch;
+    while (cur && !seen.has(cur.id)) {
+      seen.add(cur.id);
+      chain.unshift(cur);
+      cur = cur.parentBranchId ? this.repo.getBranch(cur.parentBranchId) : null;
+    }
+
+    for (let i = 0; i < chain.length - 1; i++) {
+      const anc = chain[i];
+      const stopAt = chain[i + 1].forkFromNodeId;
+      for (const n of this.repo.listNodesByBranch(anc.id)) {
+        out.push(n);
+        if (stopAt && n.id === stopAt) break;
+      }
+    }
+    for (const n of this.repo.listNodesByBranch(branch.id)) out.push(n);
+    return out;
   }
 
   /**

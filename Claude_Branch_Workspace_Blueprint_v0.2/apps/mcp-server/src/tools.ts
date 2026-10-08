@@ -21,6 +21,10 @@ export const TOOL_NAMES = [
   "archive_branch",
   "query_execution_status",
   "get_turn_result",
+  "create_task",
+  "run_task",
+  "get_task",
+  "register_artifact",
 ] as const;
 
 export type ToolName = (typeof TOOL_NAMES)[number];
@@ -56,6 +60,10 @@ const cwdSchema = z
   .max(4_096, "must be at most 4096 characters");
 
 export const inputSchemas = {
+  register_artifact: { branchId: idSchema, nodeId: idSchema, path: cwdSchema, kind: z.enum(["file", "report"]).optional(), summary: z.string().max(2000).optional() },
+  create_task: { projectId: idSchema, branchId: idSchema, title: z.string().trim().min(1).max(200), instructions: textSchema, role: z.string().max(200).optional() },
+  run_task: { taskId: idSchema },
+  get_task: { taskId: idSchema },
   create_branch_from_node: {
     projectId: idSchema,
     nodeId: idSchema,
@@ -89,6 +97,7 @@ export const inputSchemas = {
     agentRunId: idSchema.optional(),
   },
   get_turn_result: {
+    waitMs: z.number().int().min(0).max(20_000).optional().describe("Wait internally up to 20000 ms for a terminal result; default 0"),
     nodeId: idSchema,
   },
 } as const;
@@ -115,6 +124,7 @@ export interface QueryExecutionStatusInput {
 
 export interface GetTurnResultInput {
   nodeId: string;
+  waitMs?: number;
 }
 
 export interface ToolTextContent {
@@ -129,6 +139,10 @@ export interface ToolResult {
 }
 
 export interface ToolOperations {
+  registerArtifact(input: { branchId: string; nodeId: string; path: string; kind?: "file" | "report"; summary?: string }): Promise<JsonRecord>;
+  createTask(input: { projectId: string; branchId: string; title: string; instructions: string; role?: string }): Promise<JsonRecord>;
+  runTask(taskId: string): Promise<JsonRecord>;
+  getTask(taskId: string): Promise<JsonRecord>;
   createBranchFromNode(input: CreateBranchFromNodeInput): Promise<JsonRecord>;
   sendMessage(input: SendMessageInput): Promise<JsonRecord>;
   listBranches(projectId: string): Promise<JsonRecord>;
@@ -274,6 +288,14 @@ function summarizeError(status: string): string[] {
 
 export function createToolOperations(client: ControlPlaneClient): ToolOperations {
   return {
+    async registerArtifact({ branchId, ...body }) { return client.registerArtifact(branchId, body); },
+    async createTask(input) { return client.createTask(input); },
+    async runTask(taskId) { return client.runTask(taskId); },
+    async getTask(taskId) {
+      const task = await client.getTask(taskId);
+      const instructions = boundedText(task.instructions, MAX_ASSISTANT_CHARS);
+      return { ...task, instructions: instructions.value, instructionsTruncated: instructions.truncated };
+    },
     async createBranchFromNode(input): Promise<JsonRecord> {
       const response = requireRecord(
         await client.createBranchFromNode({
@@ -364,7 +386,12 @@ export function createToolOperations(client: ControlPlaneClient): ToolOperations
     },
 
     async getTurnResult(input): Promise<JsonRecord> {
-      const node = await client.getNode(input.nodeId);
+      let node = await client.getNode(input.nodeId);
+      const deadline = Date.now() + Math.min(20_000, Math.max(0, input.waitMs ?? 0));
+      while (node.status === "pending" && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, Math.min(250, deadline - Date.now())));
+        node = await client.getNode(input.nodeId);
+      }
       const branchId = stringOrNull(node.branchId);
       if (!branchId) throw new ControlPlaneError("control-plane node has no branchId", { code: "protocol" });
       const conversation = requireArray(await client.getConversation(branchId), "conversation");
@@ -382,6 +409,7 @@ export function createToolOperations(client: ControlPlaneClient): ToolOperations
         branchId,
         status,
         terminal: status !== "pending",
+        ...((input.waitMs ?? 0) > 0 ? { timedOut: status === "pending" } : {}),
         assistantContent: bounded.value,
         assistantContentTruncated: bounded.truncated,
         errors,
@@ -426,7 +454,7 @@ async function safeCall(operation: () => Promise<JsonRecord>): Promise<ToolResul
   }
 }
 
-/** Register exactly the eight public tools on an official MCP SDK server. */
+/** Register the public branch and task tools on an official MCP SDK server. */
 export function registerControlPlaneTools(server: McpServer, client: ControlPlaneClient): ToolOperations {
   const operations = createToolOperations(client);
 
@@ -509,6 +537,12 @@ export function registerControlPlaneTools(server: McpServer, client: ControlPlan
     },
     async (input) => safeCall(() => operations.getTurnResult(input)),
   );
+
+  server.registerTool("create_task", { title: "Create tracked task", description: "Create durable delegated work bound to an existing project branch; does not execute it.", inputSchema: inputSchemas.create_task }, input => safeCall(() => operations.createTask(input)));
+  server.registerTool("run_task", { title: "Run tracked task", description: "Queue a new real runtime attempt. Rejects duplicate active attempts and busy branches.", inputSchema: inputSchemas.run_task }, input => safeCall(() => operations.runTask(input.taskId)));
+  server.registerTool("get_task", { title: "Get tracked task", description: "Read durable task status, execution node/run IDs and attempt history. Use get_turn_result for node output.", inputSchema: inputSchemas.get_task }, input => safeCall(() => operations.getTask(input.taskId)));
+
+  server.registerTool("register_artifact", { title: "Declare existing result file", description: "Register an existing relative file in this branch workspace, linked to the exact execution node and its tracked task. Verifies existence and safe path; does not prove exclusive authorship.", inputSchema: inputSchemas.register_artifact }, input => safeCall(() => operations.registerArtifact(input)));
 
   return operations;
 }

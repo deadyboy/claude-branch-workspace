@@ -17,6 +17,7 @@ import type { AppContext } from "./context.js";
 import { DomainError } from "@cbw/domain";
 import { CapacityUnavailable } from "./turn-scheduler.js";
 import { registerProjects } from "./routes/projects.js";
+import { registerHost } from "./routes/host.js";
 import { registerBranches } from "./routes/branches.js";
 import { registerConversation } from "./routes/conversation.js";
 import { registerNodes } from "./routes/nodes.js";
@@ -24,6 +25,8 @@ import { registerEvents } from "./routes/events.js";
 import { registerAgentRuns } from "./routes/agent-runs.js";
 import { registerRuntime } from "./routes/runtime.js";
 import { registerAttention } from "./routes/attention.js";
+import { registerFiles } from "./routes/files.js";
+import { registerTasks } from "./routes/tasks.js";
 import { registerWs } from "./ws.js";
 
 export interface BuildAppOptions {
@@ -84,6 +87,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<import("fastify")
 
   // ROUTES FIRST.
   registerProjects(app, ctx);
+  registerHost(app, ctx);
   registerBranches(app, ctx);
   registerConversation(app, ctx);
   registerNodes(app, ctx);
@@ -91,6 +95,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<import("fastify")
   registerAgentRuns(app, ctx);
   registerRuntime(app, ctx);
   registerAttention(app, ctx);
+  registerTasks(app, ctx);
+  registerFiles(app, ctx);
   registerWs(app, ctx);
 
   // Static (SPA) LAST — the wildcard fallback must never shadow /api/* or /ws/*.

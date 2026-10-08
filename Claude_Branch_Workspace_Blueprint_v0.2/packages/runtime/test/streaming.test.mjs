@@ -4,6 +4,32 @@ import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeCliAdapter } from '../dist/index.js';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+
+test('explicit gateway env bypasses legacy settings, including explicit empty strings', () => {
+  const previousUrl = process.env.CBW_BASE_URL;
+  const previousToken = process.env.CBW_AUTH_TOKEN;
+  const previousRead = fs.readFileSync;
+  let legacyReads = 0;
+  try {
+    fs.readFileSync = () => { legacyReads++; throw new Error('legacy settings must not be read'); };
+    syncBuiltinESMExports();
+    for (const [url, token] of [['http://127.0.0.1:15722/desktop', 'FAKE_LOCAL'], ['', '']]) {
+      process.env.CBW_BASE_URL = url;
+      process.env.CBW_AUTH_TOKEN = token;
+      const adapter = new ClaudeCliAdapter();
+      assert.equal(adapter.gatewayAddress, url);
+      assert.equal(adapter.env.ANTHROPIC_AUTH_TOKEN, token);
+    }
+    assert.equal(legacyReads, 0);
+  } finally {
+    fs.readFileSync = previousRead;
+    syncBuiltinESMExports();
+    if (previousUrl === undefined) delete process.env.CBW_BASE_URL; else process.env.CBW_BASE_URL = previousUrl;
+    if (previousToken === undefined) delete process.env.CBW_AUTH_TOKEN; else process.env.CBW_AUTH_TOKEN = previousToken;
+  }
+});
 
 function fixture(t, body, timeout = 3000, persistence) {
   const dir = mkdtempSync(join(tmpdir(), 'cbw-stream-'));

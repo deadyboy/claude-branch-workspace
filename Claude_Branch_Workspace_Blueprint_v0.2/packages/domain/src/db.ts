@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 
 export type Db = Database.Database;
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 6;
 
 // Versioned migrations, applied in order. Each entry upgrades the DB from
 // version N-1 to N. Idempotent within a transaction per version.
@@ -169,8 +169,13 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
     // creation order so pre-existing rows get stable, ordered cursors.
     version: 3,
     apply(db) {
+      // Re-apply-safe: `migrate()` may replay this version to repair a DB whose
+      // ledger row is missing, and SQLite has no ADD COLUMN IF NOT EXISTS — so
+      // the column is checked first (same guard as v4) before the backfill.
+      const hasSeqRel = (db.prepare("PRAGMA table_info(events)").all() as { name: string }[])
+        .some((c) => c.name === "seq_rel");
+      if (!hasSeqRel) db.exec("ALTER TABLE events ADD COLUMN seq_rel INTEGER NOT NULL DEFAULT 0;");
       db.exec(`
-        ALTER TABLE events ADD COLUMN seq_rel INTEGER NOT NULL DEFAULT 0;
         UPDATE events SET seq_rel = (
           SELECT n FROM (
             SELECT id, ROW_NUMBER() OVER (PARTITION BY project_id ORDER BY received_at, id) AS n
@@ -178,6 +183,115 @@ const MIGRATIONS: { version: number; apply: (db: Db) => void }[] = [
           ) ranked WHERE ranked.id = events.id
         );
         CREATE INDEX IF NOT EXISTS idx_events_project_seq ON events(project_id, seq_rel);
+      `);
+    },
+  },
+  {
+    // S3 / E4a (docs/14 §4.2): the baseline commit for result review. Adds a
+    // nullable base_ref to branches — the HEAD observed when the branch's
+    // workspace was FIRST bound ("state before the work began"). Nullable so
+    // pre-existing rows stay readable; written once and never overwritten
+    // (see Repository.setBaseRef's guarded UPDATE).
+    version: 4,
+    apply(db) {
+      // Re-apply-safe: `migrate()` may replay this version to repair a DB whose
+      // ledger row is missing (see the ledger note below). SQLite has no
+      // ADD COLUMN IF NOT EXISTS, so the column is checked first.
+      const hasBaseRef = (db.prepare("PRAGMA table_info(branches)").all() as { name: string }[])
+        .some((c) => c.name === "base_ref");
+      if (!hasBaseRef) db.exec("ALTER TABLE branches ADD COLUMN base_ref TEXT;");
+    },
+  },
+  {
+    // S4 (docs/14 §5): task persistence for E5/E4b. Three additive tables —
+    // tasks / task_attempts / artifacts. A Task is the durable unit of work; a
+    // TaskAttempt is ONE try at it. Retries NEVER overwrite: each attempt is a
+    // new row, old attempts are retained (E5 "重试不丢旧记录"). Task.status is
+    // the aggregate view; attempts carry their own status.
+    //
+    // NOTE (intentional, minimal extension over the frozen §5 schema): tasks
+    // gains a nullable `role` column so E5's "任务角色和名称可编辑" has a home.
+    // No other column deviates from the frozen shape.
+    version: 5,
+    apply(db) {
+      // Re-apply-safe (IF NOT EXISTS): `migrate()` may replay this version to
+      // repair a DB whose ledger row is missing, and a replay must not collide
+      // with tables an earlier partial run already created.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS tasks (
+          id           TEXT PRIMARY KEY,
+          project_id   TEXT NOT NULL,
+          branch_id    TEXT,
+          title        TEXT NOT NULL,
+          instructions TEXT NOT NULL,
+          role         TEXT,
+          status       TEXT NOT NULL,
+          created_at   TEXT NOT NULL,
+          updated_at   TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_branch ON tasks(branch_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+
+        CREATE TABLE IF NOT EXISTS task_attempts (
+          id           TEXT PRIMARY KEY,
+          task_id      TEXT NOT NULL,
+          branch_id    TEXT,
+          node_id      TEXT,
+          agent_run_id TEXT,
+          status       TEXT NOT NULL,
+          result_ref   TEXT,
+          error        TEXT,
+          started_at   TEXT NOT NULL,
+          ended_at     TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_task_attempts_task ON task_attempts(task_id);
+
+        CREATE TABLE IF NOT EXISTS artifacts (
+          id               TEXT PRIMARY KEY,
+          project_id       TEXT NOT NULL,
+          origin_branch_id TEXT,
+          origin_node_id   TEXT,
+          origin_task_id   TEXT,
+          kind             TEXT NOT NULL,
+          path             TEXT,
+          summary          TEXT,
+          created_at       TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_artifacts_project ON artifacts(project_id);
+        CREATE INDEX IF NOT EXISTS idx_artifacts_task ON artifacts(origin_task_id);
+      `);
+    },
+  },
+  {
+    // E4b (docs/14 §4.3): the apply ledger. One row per apply operation, keyed by
+    // a DETERMINISTIC id (hash of source+target descriptor) so a repeated click
+    // is recognised and idempotently replayed. Records the source baseline
+    // (base_ref), the target path, the confirm token, and — for a mid-apply
+    // failure — exactly which paths landed, which did not, and where the pre-apply
+    // backup lives (the recovery entry). Additive table; no existing column moves.
+    version: 6,
+    apply(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS apply_operations (
+          id              TEXT PRIMARY KEY,
+          task_id         TEXT NOT NULL,
+          project_id      TEXT NOT NULL,
+          branch_id       TEXT,
+          target_path     TEXT NOT NULL,
+          base_ref        TEXT,
+          confirm_token   TEXT NOT NULL,
+          status          TEXT NOT NULL,
+          applied_json    TEXT NOT NULL DEFAULT '[]',
+          pending_json    TEXT NOT NULL DEFAULT '[]',
+          target_restored INTEGER NOT NULL DEFAULT 0,
+          backup_dir      TEXT,
+          error           TEXT,
+          created_at      TEXT NOT NULL,
+          updated_at      TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_apply_ops_task ON apply_operations(task_id);
+        CREATE INDEX IF NOT EXISTS idx_apply_ops_branch ON apply_operations(branch_id);
       `);
     },
   },
@@ -192,13 +306,78 @@ export function openDb(path: string | null): Db {
 }
 
 export function migrate(db: Db): void {
+  const ordered = [...MIGRATIONS].sort((a, b) => a.version - b.version);
   const current = db.pragma("user_version", { simple: true }) as number;
-  for (const m of MIGRATIONS) {
-    if (m.version > current) {
+
+  // A per-version ledger, because `user_version` is a single scalar and cannot
+  // express a GAP. With only the scalar, a database that somehow reached v5
+  // without v4 would be treated as fully migrated and v4 would be skipped
+  // FOREVER — silently missing a column with no error anywhere. (Observed in
+  // review: a v5-without-v4 DB keeps `user_version = 5` and never gains
+  // `branches.base_ref`.) The ledger records exactly which versions ran, so a
+  // gap is repaired on the next open instead of becoming permanent.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version    INTEGER PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+  `);
+
+  const recorded = new Set<number>(
+    (db.prepare("SELECT version FROM schema_migrations").all() as { version: number }[]).map((r) => r.version)
+  );
+
+  // Backward compatibility: databases created before the ledger existed are
+  // reconstructed from `user_version`. That is a best-effort assumption — it
+  // trusts that versions 1..current really were applied — so migrations whose
+  // objects can be checked are ALSO verified below.
+  if (recorded.size === 0 && current > 0) {
+    db.transaction(() => {
+      const stmt = db.prepare("INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, ?)");
+      for (let v = 1; v <= current; v++) stmt.run(v, new Date().toISOString());
+    })();
+    for (let v = 1; v <= current; v++) recorded.add(v);
+  }
+
+  // Objects each migration is responsible for. Used to detect — and repair — a
+  // version that the ledger believes ran but whose effect is actually absent.
+  for (const m of ordered) {
+    if (!recorded.has(m.version) || !migrationEffectPresent(db, m.version)) {
       db.transaction(() => {
         m.apply(db);
-        db.pragma(`user_version = ${m.version}`);
+        db.prepare("INSERT OR REPLACE INTO schema_migrations (version, applied_at) VALUES (?, ?)")
+          .run(m.version, new Date().toISOString());
       })();
+      recorded.add(m.version);
     }
+  }
+
+  const maxVersion = ordered.length ? ordered[ordered.length - 1].version : 0;
+  if (maxVersion > current) db.pragma(`user_version = ${maxVersion}`);
+}
+
+/**
+ * Whether a migration's effect is actually visible in the schema. Migrations
+ * without a registered check are trusted once recorded. This is the guard that
+ * turns a silently-skipped migration into a self-healing one.
+ */
+function migrationEffectPresent(db: Db, version: number): boolean {
+  const hasColumn = (table: string, column: string): boolean =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).some((c) => c.name === column);
+  const hasTable = (table: string): boolean =>
+    Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?").get(table));
+
+  switch (version) {
+    case 4:
+      // S3/E4a: branches.base_ref (see the v4 note above).
+      return hasColumn("branches", "base_ref");
+    case 5:
+      // S4: the three task tables.
+      return hasTable("tasks") && hasTable("task_attempts") && hasTable("artifacts");
+    case 6:
+      // E4b: the apply ledger.
+      return hasTable("apply_operations");
+    default:
+      return true;
   }
 }

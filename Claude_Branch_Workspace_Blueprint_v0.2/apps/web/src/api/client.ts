@@ -4,6 +4,8 @@
 
 import type {
   Project,
+  Host,
+  ProjectCapabilities,
   Branch,
   EffectiveConversationItem,
   ConversationNode,
@@ -12,13 +14,26 @@ import type {
   EventFrame,
   WorkspaceMode,
   WorkspaceStatus,
+  BranchChanges,
+  Task,
+  TaskDetail,
+  TaskAttempt,
+  ApplyPreview,
+  ApplyResult,
+  ProjectGraph,
+  FileContentResult,
 } from "../types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
+  const headers: Record<string, string> = { ...(init?.headers as Record<string, string> | undefined) };
+  // Only declare a JSON content-type when a body is actually sent. Fastify
+  // rejects `content-type: application/json` with an EMPTY body as a 400-class
+  // parse failure, which the error handler surfaces as a generic 500 — so
+  // unconditionally setting it broke every bodyless POST (interrupt, archive).
+  if (init?.body !== undefined && init.body !== null && !("content-type" in headers)) {
+    headers["content-type"] = "application/json";
+  }
+  const res = await fetch(path, { ...init, headers });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status} ${res.url}: ${body}`);
@@ -100,6 +115,9 @@ export function normalizeEventFrame(raw: unknown): EventFrame | null {
 }
 
 export const api = {
+  // ---- execution host (S0 §3) ----
+  host: () => req<Host>("/api/host"),
+
   // ---- projects ----
   listProjects: () => req<Project[]>("/api/projects"),
   createProject: (name: string, rootPath?: string) =>
@@ -107,6 +125,18 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, ...(rootPath ? { rootPath } : {}) }),
     }),
+  updateProject: (id: string, patch: { name?: string; rootPath?: string }) =>
+    req<Project>(`/api/projects/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
+  // Workspace modes this project can actually offer, with the real reason when
+  // worktree is unavailable (never a bare disabled control).
+  capabilities: (id: string) => req<ProjectCapabilities>(`/api/projects/${id}/capabilities`),
+  projectGraph: (id: string, depth: number) =>
+    req<ProjectGraph>(`/api/projects/${id}/graph?depth=${encodeURIComponent(String(depth))}`),
+  projectFileContent: (id: string, path: string) =>
+    req<FileContentResult>(`/api/projects/${id}/files/content?path=${encodeURIComponent(path)}`),
 
   // ---- branches ----
   listBranches: (projectId: string) => req<Branch[]>(`/api/projects/${projectId}/branches`),
@@ -142,6 +172,11 @@ export const api = {
     ),
   node: (id: string) => req<ConversationNode>(`/api/nodes/${id}`),
   workspace: (id: string) => req<WorkspaceStatus>(`/api/branches/${id}/workspace`),
+  branchFileContent: (id: string, path: string) =>
+    req<FileContentResult>(`/api/branches/${id}/files/content?path=${encodeURIComponent(path)}`),
+  // E4a result review (S0 §4.2). Returns committed AND uncommitted changes —
+  // a plain git diff would silently omit commits made during the run.
+  branchChanges: (id: string) => req<BranchChanges>(`/api/branches/${id}/changes`),
 
   // ---- conversation / nodes (gate 3) ----
   conversation: (branchId: string) =>
@@ -167,6 +202,41 @@ export const api = {
     req<AttentionCardWire>(`/api/attention/${id}/respond`, {
       method: "POST",
       body: JSON.stringify({ answer }),
+    }),
+
+  // ---- tasks (S4 / E5) ----
+  listTasks: (projectId: string) => req<Task[]>(`/api/projects/${projectId}/tasks`),
+  getTask: (id: string) => req<TaskDetail>(`/api/tasks/${id}`),
+  createTask: (projectId: string, title: string, instructions: string, branchId?: string, role?: string | null) =>
+    req<Task>("/api/tasks", {
+      method: "POST",
+      body: JSON.stringify({ projectId, title, instructions, ...(branchId ? { branchId } : {}), ...(role ? { role } : {}) }),
+    }),
+  editTask: (id: string, patch: { title?: string; instructions?: string; role?: string | null }) =>
+    req<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
+  // E4b: preview is a pure read; confirming requires the token the preview
+  // returned, so a target that changed in between is refused rather than
+  // silently overwritten.
+  applyPreview: (taskId: string, targetPath?: string) =>
+    req<ApplyPreview>(`/api/tasks/${taskId}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ preview: true, ...(targetPath ? { targetPath } : {}) }),
+    }),
+  applyConfirm: (taskId: string, confirmToken: string, targetPath?: string) =>
+    req<ApplyResult>(`/api/tasks/${taskId}/apply`, {
+      method: "POST",
+      body: JSON.stringify({ preview: false, confirmToken, ...(targetPath ? { targetPath } : {}) }),
+    }),
+  runTask: (taskId: string) =>
+    req<{ attempt: TaskAttempt; nodeId: string }>(`/api/tasks/${taskId}/run`, { method: "POST", body: JSON.stringify({}) }),
+  completeTaskAttempt: (
+    taskId: string,
+    attemptId: string,
+    body: { status: "completed" | "failed" | "cancelled"; resultRef?: string; error?: string }
+  ) =>
+    req<TaskAttempt>(`/api/tasks/${taskId}/attempts/${attemptId}/complete`, {
+      method: "POST",
+      body: JSON.stringify(body),
     }),
 
   // ---- events (gate 8, REST catch-up) ----
