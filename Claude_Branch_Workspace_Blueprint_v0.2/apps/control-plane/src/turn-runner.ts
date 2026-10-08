@@ -26,6 +26,7 @@ export interface RunTurnOnceArgs {
   nodeId: string;
   runtimeSessionId: string | null;
   text: string;
+  onMainRun?: (runId: string) => void;
 }
 
 export interface RunTurnOutcome {
@@ -64,6 +65,7 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
           startedAt: ev.occurredAt,
         });
         materialized.add(parentId);
+        args.onMainRun?.(parentId);
       }
       if (ev.agentRunId && !materialized.has(ev.agentRunId)) {
         const kind =
@@ -95,6 +97,7 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
           startedAt: ev.occurredAt,
         });
         materialized.add(ev.agentRunId);
+        if (kind === "main") args.onMainRun?.(ev.agentRunId);
       }
       const recorded = svc.recordEvent({
         projectId: ev.projectId,

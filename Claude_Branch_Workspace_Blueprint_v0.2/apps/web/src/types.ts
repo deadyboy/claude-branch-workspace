@@ -246,6 +246,19 @@ export interface BranchChanges {
   truncated: boolean;
 }
 
+// Use the frozen domain graph contract so the UI renders the exact node and
+// relationship semantics returned by GET /api/projects/:id/graph.
+export type { ProjectGraph, ProjectGraphNode, ProjectGraphEdge } from "../../../packages/domain/src/types";
+
+export interface FileContentResult {
+  path: string;
+  exists: boolean;
+  binary: boolean;
+  sizeBytes: number;
+  content: string | null;
+  truncated: boolean;
+}
+
 export interface WorkspaceStatus {
   mode: WorkspaceMode;
   path: string | null;

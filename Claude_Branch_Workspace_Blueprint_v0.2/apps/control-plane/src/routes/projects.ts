@@ -6,6 +6,7 @@ import type { AppContext } from "../context.js";
 import { resolve, isAbsolute } from "node:path";
 import { stat } from "node:fs/promises";
 import { probeProjectCapabilities } from "../project-capabilities.js";
+import { buildProjectGraph } from "../project-graph.js";
 
 export function registerProjects(app: FastifyInstance, ctx: AppContext): void {
   app.post("/api/projects", async (req, reply) => {
@@ -39,6 +40,22 @@ export function registerProjects(app: FastifyInstance, ctx: AppContext): void {
     const p = ctx.svc.getProject(id);
     if (!p) return reply.code(404).send({ error: "project not found" });
     return probeProjectCapabilities(p);
+  });
+
+  // S5 project relationship graph (docs/14 §4.4, E8). `depth` controls how many
+  // directory layers are expanded; the builder clamps it and reports `truncated`
+  // when a limit is hit. Paths, types and sizes only — never file contents.
+  app.get("/api/projects/:id/graph", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const p = ctx.svc.getProject(id);
+    if (!p) return reply.code(404).send({ error: "project not found" });
+
+    const raw = (req.query as { depth?: string } | undefined)?.depth;
+    if (raw !== undefined && raw !== "" && !/^\d+$/.test(raw)) {
+      return reply.code(400).send({ error: "depth must be a non-negative integer" });
+    }
+    const depth = raw === undefined || raw === "" ? undefined : Number(raw);
+    return buildProjectGraph(ctx.svc, id, { depth });
   });
 
   // S1 edit (docs/14 §4.1): rename and/or repoint rootPath. Same validation as

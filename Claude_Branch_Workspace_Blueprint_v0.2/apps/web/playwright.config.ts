@@ -19,18 +19,24 @@ const PORT = Number(process.env.CBW_E2E_PORT ?? 15723);
 const DB = process.env.CBW_E2E_DB ?? join(process.env.TEMP ?? "/tmp", `cbw-e2e-${Date.now()}.db`);
 const SCRIPT = process.env.CBW_E2E_SCRIPT ?? resolve(here, "e2e/fake-script.json");
 const CONTROL = resolve(here, "../control-plane");
+const LIVE = process.env.CBW_E2E_LIVE === "1";
 
 export default defineConfig({
   testDir: "./e2e",
+  testMatch: LIVE ? "**/live-workspace.spec.ts" : "**/*.spec.ts",
+  testIgnore: LIVE ? [] : ["**/live-workspace.spec.ts"],
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
   workers: 1,
   reporter: [["list"]],
+  outputDir: process.env.CBW_E2E_OUTPUT_DIR ?? "test-results",
   use: {
     baseURL: `http://127.0.0.1:${PORT}`,
     channel: "chrome",
     headless: true,
+    screenshot: "only-on-failure",
+    trace: "retain-on-failure",
   },
   webServer: {
     command: "node dist/index.js",
@@ -39,8 +45,10 @@ export default defineConfig({
     reuseExistingServer: false,
     timeout: 30_000,
     env: {
-      CBW_FAKE_RUNTIME: "1",
-      CBW_FAKE_SCRIPT: SCRIPT,
+      CBW_FAKE_RUNTIME: LIVE ? "0" : "1",
+      CBW_FAKE_SCRIPT: LIVE ? "" : SCRIPT,
+      CBW_MAX_CONCURRENT: "3",
+      CBW_PER_PROJECT: "3",
       CBW_DB: DB,
       CBW_PORT: String(PORT),
     },

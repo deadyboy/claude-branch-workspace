@@ -9,7 +9,7 @@
 //      branches may have written the same directory — so shared workspaces
 //      carry a visible caveat instead of a false attribution.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { useStore } from "../store/useStore";
 import type { BranchChanges, ChangeEntry } from "../types";
@@ -26,8 +26,28 @@ function StatusTag({ status }: { status: string }) {
   return <span className={`chg-status chg-${status}`}>{STATUS_LABEL[status] ?? status}</span>;
 }
 
-function ChangeRow({ entry }: { entry: ChangeEntry }) {
+function ChangeRow({ entry, branchId }: { entry: ChangeEntry; branchId: string }) {
   const [open, setOpen] = useState(false);
+  const [content, setContent] = useState<Awaited<ReturnType<typeof api.branchFileContent>> | null>(null);
+  const [contentError, setContentError] = useState<string | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const contentRequestRef = useRef(0);
+
+  async function loadCurrentContent(): Promise<void> {
+    if (entry.status === "deleted" || contentLoading) return;
+    const requestId = ++contentRequestRef.current;
+    setContentLoading(true);
+    setContentError(null);
+    try {
+      const result = await api.branchFileContent(branchId, entry.path);
+      if (contentRequestRef.current === requestId) setContent(result);
+    } catch (reason) {
+      if (contentRequestRef.current === requestId) setContentError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      if (contentRequestRef.current === requestId) setContentLoading(false);
+    }
+  }
+
   return (
     <div className="chg-row">
       <button className="chg-main" onClick={() => setOpen((v) => !v)} title={entry.path}>
@@ -40,15 +60,33 @@ function ChangeRow({ entry }: { entry: ChangeEntry }) {
       </button>
       {open && (
         <div className="chg-detail">
+          {entry.patch && !entry.binary && <pre className="chg-patch">{entry.patch}</pre>}
+          {entry.status === "deleted" && (
+            <div className="chg-binary-note">This file is deleted from the current workspace.</div>
+          )}
           {entry.binary ? (
             // Binary content is never diffed; name/size/type only (S0 §4.2).
             <div className="chg-binary-note">
               Binary file — contents not shown. {entry.sizeBytes != null ? `${entry.sizeBytes} bytes.` : ""}
             </div>
-          ) : entry.patch ? (
-            <pre className="chg-patch">{entry.patch}</pre>
-          ) : (
+          ) : !entry.patch && entry.status !== "deleted" ? (
             <div className="chg-binary-note">No textual diff available.</div>
+          ) : null}
+          {entry.status !== "deleted" && (
+            <div className="chg-current-content">
+              <button data-testid="change-current-content" onClick={() => void loadCurrentContent()} disabled={contentLoading}>
+                {contentLoading ? "Loading current content…" : content ? "Refresh current content" : "Current content"}
+              </button>
+              {contentError && <div className="hub-error" role="alert">{contentError}</div>}
+              {content?.exists === false && <div className="changes-caveat">File is missing from the current workspace.</div>}
+              {content?.exists && (
+                <>
+                  <div className="chg-size">Current file · {content.path} · {content.sizeBytes} bytes</div>
+                  {content.binary ? <div className="chg-binary-note">Binary contents are not displayed.</div> : <pre data-testid="change-current-content-body" className="chg-patch">{content.content ?? ""}</pre>}
+                  {content.truncated && <div className="changes-caveat">Current content preview truncated.</div>}
+                </>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -56,7 +94,7 @@ function ChangeRow({ entry }: { entry: ChangeEntry }) {
   );
 }
 
-function Group({ title, entries, note }: { title: string; entries: ChangeEntry[]; note?: string }) {
+function Group({ title, entries, note, branchId }: { title: string; entries: ChangeEntry[]; note?: string; branchId: string }) {
   if (entries.length === 0) return null;
   return (
     <div className="chg-group">
@@ -65,16 +103,17 @@ function Group({ title, entries, note }: { title: string; entries: ChangeEntry[]
         {note && <span className="chg-group-note">{note}</span>}
       </div>
       {entries.map((e) => (
-        <ChangeRow key={`${e.status}:${e.oldPath ?? ""}:${e.path}`} entry={e} />
+        <ChangeRow key={`${branchId}:${e.status}:${e.oldPath ?? ""}:${e.path}`} entry={e} branchId={branchId} />
       ))}
     </div>
   );
 }
 
-export function ChangesPanel({ branchId }: { branchId: string }) {
+export function ChangesPanel({ branchId, onOpenConversation }: { branchId: string; onOpenConversation?: (branchId: string) => void }) {
   const st = useStore();
   const branch = st.branches.find((b) => b.id === branchId);
-  const [changes, setChanges] = useState<BranchChanges | null>(null);
+  const [loadedChanges, setLoadedChanges] = useState<{ branchId: string; changes: BranchChanges } | null>(null);
+  const changes = loadedChanges?.branchId === branchId ? loadedChanges.changes : null;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -85,7 +124,7 @@ export function ChangesPanel({ branchId }: { branchId: string }) {
     api
       .branchChanges(branchId)
       .then((c) => {
-        if (!cancelled) setChanges(c);
+        if (!cancelled) setLoadedChanges({ branchId, changes: c });
       })
       .catch((e) => {
         if (!cancelled) setError(String(e instanceof Error ? e.message : e));
@@ -107,6 +146,7 @@ export function ChangesPanel({ branchId }: { branchId: string }) {
     <div className="changes-panel" data-testid="changes-panel">
       <div className="changes-hd">
         <span>Changes</span>
+        {onOpenConversation && <button data-testid="changes-open-conversation" onClick={() => onOpenConversation(branchId)}>Open source conversation</button>}
         {changes?.baseRef && (
           <span className="changes-base" title="Baseline recorded before this branch's work began">
             base {changes.baseRef.slice(0, 7)}
@@ -141,11 +181,12 @@ export function ChangesPanel({ branchId }: { branchId: string }) {
           <Group
             title="Committed"
             entries={changes.committed}
+            branchId={branchId}
             // This group is why `git diff` alone is insufficient (E4a).
             note={changes.baseRef ? `since ${changes.baseRef.slice(0, 7)}` : undefined}
           />
-          <Group title="Uncommitted" entries={changes.uncommitted} />
-          <Group title="Untracked" entries={changes.untracked} />
+          <Group title="Uncommitted" entries={changes.uncommitted} branchId={branchId} />
+          <Group title="Untracked" entries={changes.untracked} branchId={branchId} />
           {changes.truncated && (
             <div className="changes-caveat">Output truncated — showing the first entries only.</div>
           )}

@@ -2,7 +2,7 @@
 // repeated tools, error focus, permission focus. Attention cards pinned on top.
 // Only redacted event payloads ever render (gate 8/§11).
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore, filteredTimeline } from "../store/useStore";
 import type { TimelineEntry } from "../store/useStore";
 import { AttentionCard } from "./AttentionCard";
@@ -13,13 +13,14 @@ export function Timeline() {
   const st = useStore();
   const list = filteredTimeline(st);
   const ref = useRef<HTMLDivElement>(null);
+  const [collapsed, setCollapsed] = useState(true);
 
   useEffect(() => {
-    if (!st.pauseAutoscroll) {
+    if (!collapsed && !st.pauseAutoscroll) {
       const el = ref.current;
       if (el) el.scrollTop = el.scrollHeight;
     }
-  }, [list.length, st.pauseAutoscroll]);
+  }, [collapsed, list.length, st.pauseAutoscroll]);
 
   // Pinned cards: pending first (awaiting an allow/deny), answered after — the
   // .attn-card.answered + .attn-answered styles show the outcome of the reply.
@@ -27,7 +28,8 @@ export function Timeline() {
     ...st.attention.filter((c) => c.status === "pending"),
     ...st.attention.filter((c) => c.status === "answered"),
   ];
-  const collapsed = st.collapseRepeatedTools;
+  const pendingAttentionCount = st.attention.filter((card) => card.status === "pending").length;
+  const collapsedTools = st.collapseRepeatedTools;
 
   const counts: Record<Filter, number> = {
     all: st.timeline.length,
@@ -36,43 +38,60 @@ export function Timeline() {
     tools: filteredTimeline({ ...st, timelineFilter: "tools" }).length,
   };
 
-  const rendered = collapsed && st.timelineFilter === "tools" ? collapseRuns(list) : list;
+  const rendered = collapsedTools && st.timelineFilter === "tools" ? collapseRuns(list) : list;
 
   return (
-    <section className="pane timeline">
+    <section className={`pane timeline${collapsed ? " is-collapsed" : ""}`}>
       <div className="pane-hd">
         <span>Event Timeline <span className="tree-id">seq {st.latestSeqRel}</span></span>
-        <div className="timeline-toolbar">
-          {(["all", "errors", "permission", "tools"] as Filter[]).map((f) => (
-            <button
-              key={f}
-              className={st.timelineFilter === f ? "active" : ""}
-              onClick={() => st.setTimelineFilter(f)}
-            >
-              {f} ({counts[f]})
+        {collapsed && pendingAttentionCount > 0 && (
+          <button className="timeline-attention" onClick={() => setCollapsed(false)}>
+            Needs attention ({pendingAttentionCount})
+          </button>
+        )}
+        <button
+          className="timeline-toggle"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand Event Timeline" : "Collapse Event Timeline"}
+          onClick={() => setCollapsed((value) => !value)}
+        >
+          {collapsed ? `Show events (${st.timeline.length})` : "Hide events"}
+        </button>
+      </div>
+      {!collapsed && (
+        <>
+          <div className="timeline-toolbar">
+            {(["all", "errors", "permission", "tools"] as Filter[]).map((f) => (
+              <button
+                key={f}
+                className={st.timelineFilter === f ? "active" : ""}
+                onClick={() => st.setTimelineFilter(f)}
+              >
+                {f} ({counts[f]})
+              </button>
+            ))}
+            <button onClick={() => st.setPauseAutoscroll(!st.pauseAutoscroll)}>
+              {st.pauseAutoscroll ? "Resume autoscroll" : "Pause"}
             </button>
-          ))}
-          <button onClick={() => st.setPauseAutoscroll(!st.pauseAutoscroll)}>
-            {st.pauseAutoscroll ? "Resume autoscroll" : "Pause"}
-          </button>
-          <button onClick={() => st.setCollapseRepeatedTools(!st.collapseRepeatedTools)}>
-            {st.collapseRepeatedTools ? "Expand tools" : "Collapse tools"}
-          </button>
-        </div>
-      </div>
-      {pendingAttn.length > 0 && (
-        <div className="attn-pinned">
-          {pendingAttn.map((c) => (
-            <AttentionCard key={c.id} card={c} />
-          ))}
-        </div>
+            <button onClick={() => st.setCollapseRepeatedTools(!st.collapseRepeatedTools)}>
+              {st.collapseRepeatedTools ? "Expand tools" : "Collapse tools"}
+            </button>
+          </div>
+          {pendingAttn.length > 0 && (
+            <div className="attn-pinned">
+              {pendingAttn.map((c) => (
+                <AttentionCard key={c.id} card={c} />
+              ))}
+            </div>
+          )}
+          <div className="timeline-list" ref={ref}>
+            {rendered.map((t) => (
+              <TimelineRow key={t.eventId} entry={t} />
+            ))}
+            {rendered.length === 0 && <div className="empty">No events yet.</div>}
+          </div>
+        </>
       )}
-      <div className="timeline-list" ref={ref}>
-        {rendered.map((t) => (
-          <TimelineRow key={t.eventId} entry={t} />
-        ))}
-        {rendered.length === 0 && <div className="empty">No events yet.</div>}
-      </div>
     </section>
   );
 }

@@ -1,6 +1,13 @@
 {
   "turns": [
     {
+      "text": "E2E_RETRY_ONCE",
+      "events": [
+        { "kind": "assistant", "text": "Controlled first-attempt failure" },
+        { "kind": "result", "exitCode": 1, "stopReason": "error" }
+      ]
+    },
+    {
       "text": "approve the change",
       "events": [
         { "kind": "init", "externalSessionId": "e2e-attn" },

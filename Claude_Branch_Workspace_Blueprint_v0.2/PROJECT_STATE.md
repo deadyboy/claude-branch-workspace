@@ -1,5 +1,47 @@
 # PROJECT STATE
 
+## Visual Workspace — 2026-10-08 委派复验与可操作预览（PARTIAL）
+
+E6最小真实复验PASS：同一qwen3.8-chat/bridge，独立15827实例与干净数据，主Agent经产品MCP创建历史子分支、创建/运行Task、get_turn_result读取完成输出并返回VERIFIED；子Task只包含分叉前PAST标记，不包含之后FUTURE标记。主控轮次175333ms，仍在原180秒上限内。它是针对E6的HTTP产品入口复验，不是重新跑完整浏览器链路；单次接近阈值，不代表稳定性/性能已验收。
+
+前轮110.484秒分叉中，本地前后处理约2.798秒，子CLI请求/生成时间窗107.686秒；历史确认生成了1651字符总结。已将实际orchestrator seed改为仅回复TRANSCRIPT_ACK，保留完整历史、角色与只读禁止执行规则。回归先红后绿，相关6/6通过，Astra独立review通过。本轮分叉工具11.318秒且实际只回复TRANSCRIPT_ACK；新fixture/上游波动使其不是严格同输入A/B，不宣称固定提速比例。结果工具返回后主控仍用了约78秒才完成回答，后续性能重点在模型各轮响应，而非创建Task接口。
+
+UI新增窄屏header换行与5视图可达；Timeline默认折叠、待处理数量入口及展开自动滚动。web构建通过，Astra最终review通过；实际约650px与1280px浏览器验证了Graph历史上下文、Team执行详情、Project真实文件预览与日志展开到底部。尚无完整视觉重设计、团队关系图或代码语义项目图；当前仍是可操作原型。
+
+已保留真实验收数据的独立预览：http://127.0.0.1:15826 。打开Live acceptance 349eff8d可查看历史分叉、完成文件任务与成果；其中cancelled的MCP worker是上轮超时实验重启后的真实恢复状态，不伪造成成功。首次预览前保存cbw-before-preview.db；全局配置、bridge15722与生产15723未改。预览使用最新构建。
+
+证据：E6数据/会话/result.json在 `F:\CodexTemp\cbw-e6-ack-eqykZl`；日志与Graph/Team/Project截图在 `F:\CodexTemp\cbw-preview-20261008`。此前全量测试批次异常仍保留，不因针对性测试成功改写。下一批优先统一UI信息层级与中文文案、团队关系视图；同时继续记录模型等待与E6稳定性，剩余E3/E4/E7/E9按实验方案推进。
+
+## Visual Workspace — 2026-10-08 bridge 接入修复（PARTIAL）
+
+已定位此前 warm-up 超时：本项目独立 Claude CLI 读取旧全局配置，连接桌面 bridge 时返回 401；仅替换进程环境仍会被旧 CLI settings 覆盖。隔离配置后发现旧 qwen3.6-chat 不在现有凭据的模型目录中；使用当前桌面配置列出的 qwen3.8-chat 后真实会话成功。学校网关凭据仍由既有 bridge 链路管理，无需用户重填，也未修改全局 settings、bridge 配置或生产服务。
+
+新增 `pnpm start:bridge -- --model qwen3.8-chat --data-dir <专用目录> --port <独立端口>`：读取桌面已应用 profile，校验本机端点及模型，将内部凭据仅传入子进程环境；数据库与非敏感 CLI 配置成对保存。原 `pnpm start` 保留。新入口在原生 Windows 实际创建会话并得到预期回答（24.2秒）；入口测试7/7通过。
+
+真实浏览器复验已证明历史 worktree 分叉隔离及任务实际写文件。另修复两个实测阻断：Team 派工前读取服务器已完成轮次并拒绝过期项目/分支响应；正式 turn 精确允许本项目12个MCP工具，解决 register_artifact 被CLI拒绝。初始化仍禁用工具，未使用全局权限绕过。Astra独立审阅通过，Sol runtime针对性10/10通过。
+
+最终版本全项目构建通过。全量单元测试228通过、3跳过、1失败（shutdown-fork文件）；该关闭测试原样单独复跑1/1通过，批次失败原因尚未确定，不能称本轮整组全绿。干净数据库真实UI复验已通过：UI建项目、历史worktree隔离、Team隔离派工写文件及MCP登记、Project文件预览/回源、Results当前内容/回源。E6未通过：主控轮次在浏览器180秒等待上限仍pending；事件证明create_branch_from_node/create_task/run_task已调用并返回，实验停止后的数据库显示子Task仍running，尚无完成与结果回收证据。整场耗时8.7分钟，结论PARTIAL；未盲目延长超时。下一步从这组会话/工具记录区分分叉初始化、上游生成和结果等待耗时，再复验E6。不能将局部通过等同全部E1—E9验收。证据：`F:\CodexTemp\cbw-runtime-20261008-2TROKD` 的 `build-final.log`、`unit-final.log`、`live-final.log`；最终浏览器实验数据与截图在 `F:\CodexTemp\cbw-live-final-iUVOfM`。所有实验使用独立端口/数据，未commit/push或重启生产。
+
+## Visual Workspace — 2026-10-07 本地实现与验收（PARTIAL）
+
+当前分支 `codex/visual-workspace-m1`，基于 `11a3463` 的未提交增量；保留 Claude 原有改动。旧 Phase/远程部署记录不能作为本轮 UI 验收结果。
+
+Astra指挥并独立审阅，Sol负责后端，Luna负责界面，主Agent集成验收。本轮接通：Graph历史上下文/明确跳转/历史分叉后进入子分支；Team通过统一scheduler/runtime实际派工和重试；正式会话配置当前实例MCP创建/启动/查询Task、等待结果与登记文件；Project目录展开、文件预览与Task/Artifact来源；Results读取当前文件及返回来源分支。文件登记证明执行声明与存在性，不证明独占写入；无来源记录不猜测关系，worktree文件按实际分支目录读取。
+
+修复实际验收缺陷：独立视图落入窄列导致节点被挡；删除diff丢失；跨分支旧内容残留；首次REST读取和WS接入空档漏刷新。分支读取按项目、分支、打开轮次拒绝过期响应。
+
+原生Windows验证：全项目 `pnpm build` 成功；`pnpm test` 227通过、3默认live跳过、0失败。11个模拟浏览器场景均有通过记录：整组10通过/1失败，剩余isolated dispatch修复后原用例单独通过（3.4秒）；不是最终版本整组11/11重跑。
+
+**真实模型验收失败，后续场景未执行**：独立15824端口与live.db，从UI创建合成Git项目并发首条消息；CLI会话warm-up在120000ms超时，节点failed。尚未进入正式send/MCP调用；历史隔离、真实文件生成、回源和E6主控委派均不得标PASS。未延长超时、换模型、改认证或重启生产。
+
+只读定位：CLI进程已启动，合成会话记录存在用户输入但没有assistant/API错误；15722网关监听与心跳正常，现有指标未观察到本次请求进入上游。runtime有意不保存stderr，无法据现有证据区分CLI请求前等待、鉴权前拒绝或网关问题；不能将猜测写成根因。选定模型未改，未继续发送模型请求。
+
+证据：`F:\CodexTemp\cbw-ui-x\codex-20261007-141726-4e5b93` 下 `build.log`、`unit.log`、`e2e-final.log`、`isolated-recheck.log`、`live.log`及output截图/trace；首轮失败证据保留。
+
+工作估计：接手约40–50%，本轮后约55–65%，按产品操作闭环判断，非代码统计；M1/M2/M3仍PARTIAL。剩余：定位初始化阻塞并验证真实模型闭环，E3/E4完整UI应用/冲突矩阵，E7规模/性能，多项目异常恢复，E9用户无指导试用。Project初版只表达文件包含/任务执行/成果来源，不声称理解任意项目的代码语义。
+
+未commit/push、未合并远端、未迁移生产数据库、未重启15723实例。分配与执行顺序见 `docs/13_VISUAL_WORKSPACE_EXPERIMENT_PLAN.md` §11。
+
 ## Remote deployment — RESOLVED 2026-09-27 (see SERVER_DEPLOYMENT_HANDOFF.md)
 
 Auth blocker FIXED (server settings token set to the real desktop credential + control-plane

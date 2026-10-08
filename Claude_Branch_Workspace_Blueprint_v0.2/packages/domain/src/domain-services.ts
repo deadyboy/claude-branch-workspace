@@ -798,6 +798,14 @@ export class DomainService {
     // An attempt may run on the task's branch or an explicit one; validate when given.
     const branchId = input.branchId ?? task.branchId;
     if (branchId) this.requireBranchInProject(branchId, task.projectId);
+    if (input.nodeId) {
+      const node = this.repo.getNode(input.nodeId);
+      if (!node || node.projectId !== task.projectId || node.branchId !== branchId) throw new DomainError("attempt node binding must match task project and branch");
+    }
+    if (input.agentRunId) {
+      const run = this.repo.getAgentRun(input.agentRunId);
+      if (!run || run.ownerBranchId !== branchId || run.ownerNodeId !== (input.nodeId ?? null)) throw new DomainError("attempt run binding must match its execution node and branch");
+    }
 
     const a: TaskAttempt = {
       id: randomUUID(),
@@ -820,6 +828,20 @@ export class DomainService {
     return this.repo.getTaskAttempt(a.id) as TaskAttempt;
   }
 
+  startTaskAttempt(id: string): TaskAttempt {
+    const a = this.repo.getTaskAttempt(id);
+    if (!a) throw new DomainError(`task attempt ${id} not found`);
+    this.repo.transaction(() => { this.repo.startTaskAttempt(id); this.recomputeTaskStatus(a.taskId); });
+    return this.repo.getTaskAttempt(id)!;
+  }
+  attachTaskAttemptRun(id: string, runId: string): void {
+    const a = this.repo.getTaskAttempt(id);
+    const run = this.repo.getAgentRun(runId);
+    if (!a || !run || run.ownerNodeId !== a.nodeId || run.ownerBranchId !== a.branchId) {
+      throw new DomainError("attempt run binding must match its execution node and branch");
+    }
+    this.repo.attachTaskAttemptRun(id, runId);
+  }
   /**
    * Terminal transition for ONE attempt, then re-aggregate the task. The attempt
    * row is preserved (it is only marked terminal, never deleted/reused).
@@ -880,6 +902,11 @@ export class DomainService {
       if (t.projectId !== input.projectId) {
         throw new DomainError(`task ${input.originTaskId} belongs to project ${t.projectId}, not ${input.projectId}`);
       }
+    }
+    if (input.originBranchId) this.requireBranchInProject(input.originBranchId, input.projectId);
+    if (input.originNodeId) {
+      const node = this.repo.getNode(input.originNodeId);
+      if (!node || node.projectId !== input.projectId || (input.originBranchId && node.branchId !== input.originBranchId)) throw new DomainError("artifact node binding must match its project and origin branch");
     }
     const a: Artifact = {
       id: input.id ?? randomUUID(),

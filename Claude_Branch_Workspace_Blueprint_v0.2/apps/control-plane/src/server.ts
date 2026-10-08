@@ -25,6 +25,7 @@ import { registerEvents } from "./routes/events.js";
 import { registerAgentRuns } from "./routes/agent-runs.js";
 import { registerRuntime } from "./routes/runtime.js";
 import { registerAttention } from "./routes/attention.js";
+import { registerFiles } from "./routes/files.js";
 import { registerTasks } from "./routes/tasks.js";
 import { registerWs } from "./ws.js";
 
@@ -95,6 +96,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<import("fastify")
   registerRuntime(app, ctx);
   registerAttention(app, ctx);
   registerTasks(app, ctx);
+  registerFiles(app, ctx);
   registerWs(app, ctx);
 
   // Static (SPA) LAST — the wildcard fallback must never shadow /api/* or /ws/*.

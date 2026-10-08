@@ -752,7 +752,8 @@ export async function applyTask(
     svc.createArtifact({
       projectId: p.task.projectId,
       originBranchId: p.branch.id,
-      originNodeId: p.changes.latestNodeId,
+      // Applying a workspace snapshot does not prove its last turn authored it.
+      originNodeId: null,
       originTaskId: p.task.id,
       kind: "changeset",
       path: p.target.targetPath,

@@ -7,8 +7,9 @@
 
 import { openDb, Repository, DomainService } from "@cbw/domain";
 import { EventBus } from "@cbw/event-protocol";
-import { ClaudeCliAdapter } from "@cbw/runtime";
+import { ClaudeCliAdapter, type RuntimeAdapter } from "@cbw/runtime";
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { resolve, dirname } from "node:path";
 import { SessionManager } from "./session-manager.js";
 import { ForkOrchestrator } from "./fork-orchestrator.js";
@@ -51,7 +52,17 @@ export async function main(): Promise<void> {
   // RuntimePersistence): upsertRuntimeSession + getRuntimeSessionByExternalId
   // let it recover the external-id → sessionKey mapping after a control-plane
   // restart (gate 13 restart-resume) instead of dropping to an orphan turn.
-  const adapter = fake ? loadFakeAdapter() : new ClaudeCliAdapter(undefined, undefined, svc);
+  const mcpEntry = fileURLToPath(new URL("../../mcp-server/dist/index.js", import.meta.url));
+  const adapter: RuntimeAdapter = fake ? loadFakeAdapter() : new ClaudeCliAdapter(undefined, undefined, svc, undefined, undefined, (sessionKey) => {
+    const binding = svc.getRuntimeSession(sessionKey);
+    const branch = binding ? svc.getBranch(binding.branchId) : null;
+    if (!branch) return null;
+    if (!existsSync(mcpEntry)) throw new Error("product MCP server is not built; build @cbw/mcp-server before execution");
+    return {
+      mcpConfig: JSON.stringify({ mcpServers: { "cbw-control": { command: process.execPath, args: [mcpEntry], env: { CBW_CONTROL_PLANE_URL: `http://${HOST}:${PORT}` } } } }),
+      systemContext: `This is a product-managed conversation. Current projectId=${branch.projectId}, branchId=${branch.id}, nodeId=${sessionManager.getState(branch.id)?.nodeId ?? "unavailable"}. CBW MCP tools create persistent branches from completed turns and track delegated work with create_task, run_task, get_task. Use register_artifact with your current nodeId and relative file path to declare existing output files (this verifies existence, not exclusive authorship). Use task execution for delegated work; keep temporary native subagents distinct. Do not submit a task to this busy main branch.`,
+    };
+  });
   const sessionManager = new SessionManager(svc, adapter);
   const workspaceManager = new WorkspaceManager(svc);
   const scheduler = new TurnScheduler(Number(process.env.CBW_MAX_CONCURRENT ?? 5), Number(process.env.CBW_PER_PROJECT ?? 5));

@@ -221,6 +221,15 @@ export function splitInherited(
   return { inherited, local };
 }
 
+/** Return the effective history through an exact persisted turn id. */
+export function conversationThroughNode(
+  conversation: EffectiveConversationItem[],
+  nodeId: string
+): EffectiveConversationItem[] | null {
+  const end = conversation.map((item) => item.nodeId).lastIndexOf(nodeId);
+  return end < 0 ? null : conversation.slice(0, end + 1);
+}
+
 /**
  * Which branch owns a given turn, following the fork chain when the turn is an
  * ancestor of the branch being viewed. Returns null when the turn is unrelated.

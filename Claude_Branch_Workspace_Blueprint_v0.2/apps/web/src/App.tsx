@@ -14,6 +14,7 @@ import { ProjectHub } from "./components/ProjectHub";
 import { ConversationGraphView, BranchBreadcrumb } from "./components/ConversationGraphView";
 import { ChangesPanel } from "./components/ChangesPanel";
 import { TeamView } from "./components/TeamView";
+import { ProjectGraphView } from "./components/ProjectGraphView";
 
 const PENDING_REFRESH_FAST_INTERVAL_MS = 1_500;
 const PENDING_REFRESH_SLOW_INTERVAL_MS = 5_000;
@@ -26,9 +27,11 @@ export function App() {
   const st = useStore();
   const [hubOpen, setHubOpen] = useState(false);
   // Conversation | Graph | Project are the three views from the plan (S0 §3.2).
-  const [view, setView] = useState<"conversation" | "graph" | "results" | "team">("conversation");
+  const [view, setView] = useState<"conversation" | "graph" | "results" | "team" | "project">("conversation");
+  const [highlightNodeId, setHighlightNodeId] = useState<string | null>(null);
+  const openProjectRequestRef = useRef(0);
   const streamRef = useRef<WsStream | null>(null);
-  const refreshTokenRef = useRef(0);
+  const branchRefreshSequenceRef = useRef(new Map<string, number>());
   const refreshAllTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshInFlightRef = useRef<Promise<void> | null>(null);
   const refreshAgainRef = useRef(false);
@@ -132,6 +135,7 @@ export function App() {
    * data loaded (the hub preview path) without disturbing the live socket.
    */
   async function openProject(projectId: string, opts: { seedStream: boolean }): Promise<void> {
+    const requestId = ++openProjectRequestRef.current;
     const previousProjectId = useStore.getState().activeProjectId;
     if (previousProjectId !== projectId) {
       // Drop the old project's state and stop its stream before the new load,
@@ -144,8 +148,10 @@ export function App() {
     rememberProject(projectId);
 
     let branches = await api.listBranches(projectId);
+    if (requestId !== openProjectRequestRef.current) return;
     if (branches.length === 0) {
       const created = await api.createRoot(projectId, "Main", "shared");
+      if (requestId !== openProjectRequestRef.current) return;
       branches = [created.branch];
     }
     useStore.getState().setBranches(branches);
@@ -154,6 +160,7 @@ export function App() {
       useStore.getState().setActiveBranch(main.id);
       await refreshBranchData(main.id);
     }
+    if (requestId !== openProjectRequestRef.current) return;
 
     try {
       useStore.getState().setAttention(await api.listAttention());
@@ -166,6 +173,7 @@ export function App() {
     // This is a project-scoped cursor. Branch-scoped events would omit events
     // from sibling branches and cannot seed the project WS stream.
     const events = await api.eventsAfter(projectId, 0);
+    if (requestId !== openProjectRequestRef.current) return;
     useStore.getState().seedTimeline(events.events);
 
     const stream = new WsStream(projectId, (frame) => {
@@ -188,6 +196,11 @@ export function App() {
     streamRef.current?.stop();
     streamRef.current = stream;
     stream.start(events.latestSeqRel);
+    // `eventsAfter` closes the websocket gap for the timeline, but it does not
+    // rebuild the active branch conversation. A first send can finish before
+    // this socket is attached, so reconcile the branch after the cursor is live.
+    const activeBranchAfterSeed = useStore.getState().activeBranchId;
+    if (activeBranchAfterSeed) void refreshBranchData(activeBranchAfterSeed);
     stopStartupRetry();
   }
 
@@ -198,6 +211,14 @@ export function App() {
     } catch (error) {
       console.error("open project failed", error);
     }
+  }
+
+  function openConversation(branchId: string, nodeId?: string): void {
+    const branch = useStore.getState().branches.find((item) => item.id === branchId);
+    if (!branch || branch.projectId !== useStore.getState().activeProjectId) return;
+    setHighlightNodeId(nodeId ?? null);
+    useStore.getState().setActiveBranch(branchId);
+    setView("conversation");
   }
 
   async function refreshAll(): Promise<void> {
@@ -251,7 +272,14 @@ export function App() {
   }
 
   async function refreshBranchData(branchId: string): Promise<void> {
-    const token = ++refreshTokenRef.current;
+    const before = useStore.getState();
+    const projectId = before.activeProjectId;
+    const branch = before.branches.find((item) => item.id === branchId);
+    if (!projectId || !branch || branch.projectId !== projectId) return;
+    const openProjectRequestId = openProjectRequestRef.current;
+    const requestKey = `${projectId}\u0000${branchId}`;
+    const requestSequence = (branchRefreshSequenceRef.current.get(requestKey) ?? 0) + 1;
+    branchRefreshSequenceRef.current.set(requestKey, requestSequence);
     try {
       const [conversation, nodes, runs, workspace] = await Promise.all([
         api.conversation(branchId),
@@ -259,8 +287,14 @@ export function App() {
         api.agentRuns(branchId),
         api.workspace(branchId).catch(() => null),
       ]);
-      if (token !== refreshTokenRef.current || disposedRef.current) return;
       const current = useStore.getState();
+      if (
+        disposedRef.current ||
+        openProjectRequestId !== openProjectRequestRef.current ||
+        current.activeProjectId !== projectId ||
+        branchRefreshSequenceRef.current.get(requestKey) !== requestSequence ||
+        !current.branches.some((item) => item.id === branchId && item.projectId === projectId)
+      ) return;
       current.setConversation(branchId, conversation);
       current.setNodes(branchId, nodes);
       current.setAgentRuns(branchId, runs);
@@ -401,6 +435,15 @@ export function App() {
           >
             Team
           </button>
+          <button
+            role="tab"
+            aria-selected={view === "project"}
+            className={view === "project" ? "active" : ""}
+            onClick={() => setView("project")}
+            title="Browse files, tasks, artifacts, and their recorded sources"
+          >
+            Project
+          </button>
         </div>
       </header>
       <BranchBreadcrumb branch={st.branches.find((b) => b.id === st.activeBranchId)} />
@@ -408,17 +451,19 @@ export function App() {
         {view === "conversation" ? (
           <>
             <ConversationTree />
-            <ChatPane />
+            <ChatPane highlightNodeId={highlightNodeId} />
             <AgentMonitor />
           </>
         ) : view === "graph" ? (
-          <ConversationGraphView />
+          <ConversationGraphView onOpenConversation={openConversation} />
         ) : view === "team" ? (
-          <TeamView />
+          <TeamView onOpenBranch={(branchId) => openConversation(branchId)} />
+        ) : view === "project" ? (
+          <ProjectGraphView onOpenConversation={(branchId, nodeId) => openConversation(branchId, nodeId)} />
         ) : (
           <div className="pane results">
             {st.activeBranchId ? (
-              <ChangesPanel branchId={st.activeBranchId} />
+              <ChangesPanel branchId={st.activeBranchId} onOpenConversation={(branchId) => openConversation(branchId)} />
             ) : (
               <div className="empty">Select a branch to review its results.</div>
             )}

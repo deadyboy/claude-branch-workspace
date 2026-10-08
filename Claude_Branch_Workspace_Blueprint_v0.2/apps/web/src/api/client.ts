@@ -20,6 +20,8 @@ import type {
   TaskAttempt,
   ApplyPreview,
   ApplyResult,
+  ProjectGraph,
+  FileContentResult,
 } from "../types";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
@@ -131,6 +133,10 @@ export const api = {
   // Workspace modes this project can actually offer, with the real reason when
   // worktree is unavailable (never a bare disabled control).
   capabilities: (id: string) => req<ProjectCapabilities>(`/api/projects/${id}/capabilities`),
+  projectGraph: (id: string, depth: number) =>
+    req<ProjectGraph>(`/api/projects/${id}/graph?depth=${encodeURIComponent(String(depth))}`),
+  projectFileContent: (id: string, path: string) =>
+    req<FileContentResult>(`/api/projects/${id}/files/content?path=${encodeURIComponent(path)}`),
 
   // ---- branches ----
   listBranches: (projectId: string) => req<Branch[]>(`/api/projects/${projectId}/branches`),
@@ -166,6 +172,8 @@ export const api = {
     ),
   node: (id: string) => req<ConversationNode>(`/api/nodes/${id}`),
   workspace: (id: string) => req<WorkspaceStatus>(`/api/branches/${id}/workspace`),
+  branchFileContent: (id: string, path: string) =>
+    req<FileContentResult>(`/api/branches/${id}/files/content?path=${encodeURIComponent(path)}`),
   // E4a result review (S0 §4.2). Returns committed AND uncommitted changes —
   // a plain git diff would silently omit commits made during the run.
   branchChanges: (id: string) => req<BranchChanges>(`/api/branches/${id}/changes`),
@@ -199,11 +207,13 @@ export const api = {
   // ---- tasks (S4 / E5) ----
   listTasks: (projectId: string) => req<Task[]>(`/api/projects/${projectId}/tasks`),
   getTask: (id: string) => req<TaskDetail>(`/api/tasks/${id}`),
-  createTask: (projectId: string, title: string, instructions: string, branchId?: string) =>
+  createTask: (projectId: string, title: string, instructions: string, branchId?: string, role?: string | null) =>
     req<Task>("/api/tasks", {
       method: "POST",
-      body: JSON.stringify({ projectId, title, instructions, ...(branchId ? { branchId } : {}) }),
+      body: JSON.stringify({ projectId, title, instructions, ...(branchId ? { branchId } : {}), ...(role ? { role } : {}) }),
     }),
+  editTask: (id: string, patch: { title?: string; instructions?: string; role?: string | null }) =>
+    req<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   // E4b: preview is a pure read; confirming requires the token the preview
   // returned, so a target that changed in between is refused rather than
   // silently overwritten.
@@ -217,8 +227,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ preview: false, confirmToken, ...(targetPath ? { targetPath } : {}) }),
     }),
-  startTaskAttempt: (taskId: string) =>
-    req<TaskAttempt>(`/api/tasks/${taskId}/attempts`, { method: "POST", body: JSON.stringify({}) }),
+  runTask: (taskId: string) =>
+    req<{ attempt: TaskAttempt; nodeId: string }>(`/api/tasks/${taskId}/run`, { method: "POST", body: JSON.stringify({}) }),
   completeTaskAttempt: (
     taskId: string,
     attemptId: string,

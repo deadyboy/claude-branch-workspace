@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import {
   buildConversationGraph,
+  conversationThroughNode,
   layoutGraph,
   GRAPH_NODE_W as NODE_W,
   GRAPH_NODE_H as NODE_H,
@@ -35,10 +36,14 @@ const STATUS_STROKE: Record<string, string> = {
   archived: "#8b94a3",
 };
 
-export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId: string) => void }) {
+export function ConversationGraphView({
+  onOpenConversation,
+}: { onOpenConversation?: (branchId: string, nodeId: string) => void }) {
   const st = useStore();
   const [selected, setSelected] = useState<string | null>(null);
   const [forkFrom, setForkFrom] = useState<{ branch: Branch; nodeId: string } | null>(null);
+  const [context, setContext] = useState<{ nodeId: string; items: import("../types").EffectiveConversationItem[] } | null>(null);
+  const [contextState, setContextState] = useState<"idle" | "loading" | "missing" | "error">("idle");
 
   // The store only loads turns for the ACTIVE branch. The graph is a
   // project-wide view, so without this it would draw branch boxes with no turns
@@ -79,6 +84,33 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
 
   const positions = useMemo(() => layoutGraph(graph), [graph]);
 
+  const selectedNode = selected ? graph.nodes.find((n) => n.id === selected) : null;
+
+  useEffect(() => {
+    let disposed = false;
+    if (selectedNode?.kind !== "turn" || !selectedNode.nodeId) {
+      setContext(null);
+      setContextState("idle");
+      return;
+    }
+    const { nodeId, branchId } = selectedNode;
+    setContext(null);
+    setContextState("loading");
+    void api.conversation(branchId).then((items) => {
+      if (disposed) return;
+      const throughNode = conversationThroughNode(items, nodeId);
+      if (!throughNode) {
+        setContextState("missing");
+        return;
+      }
+      setContext({ nodeId, items: throughNode });
+      setContextState("idle");
+    }).catch(() => {
+      if (!disposed) setContextState("error");
+    });
+    return () => { disposed = true; };
+  }, [selectedNode?.kind, selectedNode?.nodeId, selectedNode?.branchId]);
+
   if (graph.nodes.length === 0) {
     return <div className="empty">No branches to graph yet.</div>;
   }
@@ -87,8 +119,6 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
   const ys = Array.from(positions.values()).map((p) => p.y);
   const width = Math.max(...xs, 0) + NODE_W + 24;
   const height = Math.max(...ys, 0) + NODE_H + 24;
-
-  const selectedNode = selected ? graph.nodes.find((n) => n.id === selected) : null;
 
   return (
     <div className="graph-wrap">
@@ -143,7 +173,6 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
                 className={`gnode gnode-${node.kind} ${isSelected ? "selected" : ""}`}
                 onClick={() => {
                   setSelected(node.id);
-                  if (node.kind === "turn" && node.nodeId && onSelectTurn) onSelectTurn(node.nodeId);
                 }}
                 data-node-id={node.id}
                 data-node-kind={node.kind}
@@ -166,7 +195,7 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
         </svg>
       </div>
       {selectedNode && (
-        <div className="graph-inspect" data-testid="graph-inspect">
+        <div className="graph-inspect" data-testid="graph-inspect" data-node-id={selectedNode.id}>
           <span className="badge subtle">{selectedNode.kind}</span>
           <strong>{selectedNode.label}</strong>
           <span className="graph-inspect-meta">
@@ -176,6 +205,27 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
             <span className="graph-inspect-meta">
               {selectedNode.forkable ? "completed — forkable" : "not forkable"}
             </span>
+          )}
+          {selectedNode.kind === "turn" && selectedNode.nodeId && (
+            <>
+              <button
+                data-testid="graph-open-conversation"
+                onClick={() => onOpenConversation?.(selectedNode.branchId, selectedNode.nodeId!)}
+              >
+                Open conversation
+              </button>
+              <div className="graph-context" data-testid="graph-context" data-node-id={selectedNode.nodeId}>
+                {contextState === "loading" && <span className="hint">Loading history through this turn…</span>}
+                {contextState === "missing" && <span className="hint">This turn is not in its branch's effective history.</span>}
+                {contextState === "error" && <span className="hint">Conversation history could not be loaded.</span>}
+                {context?.nodeId === selectedNode.nodeId && context.items.map((item, index) => (
+                  <div className="graph-context-item" key={`${item.nodeId}-${item.seq}-${item.role}-${index}`} data-context-node-id={item.nodeId}>
+                    <strong>{item.role === "user" ? "You" : "Assistant"}</strong>
+                    <span>{item.content}</span>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
           {/* Forking from the graph is the point of the whole view: the user
               picks a historical turn and branches the conversation there.
@@ -199,6 +249,7 @@ export function ConversationGraphView({ onSelectTurn }: { onSelectTurn?: (nodeId
           branch={forkFrom.branch}
           defaultNodeId={forkFrom.nodeId}
           onClose={() => setForkFrom(null)}
+          onCreated={(created) => onOpenConversation?.(created.id, forkFrom.nodeId)}
         />
       )}
     </div>

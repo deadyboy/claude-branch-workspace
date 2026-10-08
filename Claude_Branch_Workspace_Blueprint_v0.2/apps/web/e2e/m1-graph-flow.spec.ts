@@ -111,9 +111,10 @@ test("E7-M1: graph renders real turns and supports 30 interactions", async ({ pa
     const id = ids[i % ids.length];
     await svg.locator(`g[data-node-id="${id}"]`).click();
     await expect(inspect).toBeVisible();
-    // The inspector must actually name the selected node, not show a stale one.
-    const shown = await inspect.textContent();
-    expect(shown && shown.length > 0).toBeTruthy();
+    // A stale inspector must fail even if it still contains non-empty text.
+    await expect(inspect).toHaveAttribute("data-node-id", id);
+    const selectedLabel = await svg.locator(`g[data-node-id="${id}"] text`).textContent();
+    await expect(inspect.locator("strong").first()).toHaveText((selectedLabel ?? "").replace(/^⑂\s*/, ""));
   }
 
   // Unknown nodes must never be rendered as openable (E8-style honesty, but
@@ -202,4 +203,40 @@ test("E2: the nested tree shows the fork chain with increasing depth", async ({ 
   for (let i = 1; i < depths.length; i++) {
     expect(depths[i] - depths[i - 1]).toBeLessThanOrEqual(1);
   }
+});
+
+test("M1: inspect historical context, fork in the graph, and continue only the child", async ({ page }) => {
+  test.setTimeout(90_000);
+  await page.goto("/");
+  await expect(page.locator(".socket-txt")).toHaveText("connected");
+  const seeded = await seedForkChain(page);
+  const mainId = seeded.branchIds[0];
+  const nodes = await (await page.request.get(`/api/branches/${mainId}/nodes`)).json();
+  const sourceNode = nodes[1];
+  const before = await (await page.request.get(`/api/branches/${mainId}/conversation`)).json();
+  await page.evaluate((id) => localStorage.setItem("cbw.activeProjectId", id), seeded.projectId);
+  await page.reload();
+  await page.getByRole("tab", { name: "Graph", exact: true }).click();
+  const source = page.getByTestId("conversation-graph").locator(`g[data-node-id="turn:${sourceNode.id}"]`);
+  await source.click();
+  const context = page.getByTestId("graph-context");
+  await expect(context).toContainText(`seed ${mainId.slice(0, 4)} turn 2`);
+  await expect(context).not.toContainText(`seed ${mainId.slice(0, 4)} turn 3`);
+  await page.getByTestId("graph-fork-button").click();
+  const dialog = page.getByRole("dialog", { name: "Fork branch" });
+  const childName = `UI-child-${Date.now()}`;
+  await dialog.getByLabel("Branch name").fill(childName);
+  await dialog.getByRole("button", { name: "Fork", exact: true }).click();
+  await expect(page.locator(".chat .pane-hd").first()).toContainText(childName);
+  const message = `child-only-${Date.now()}`;
+  await page.locator(".composer textarea").fill(message);
+  await page.getByRole("button", { name: "Continue branch", exact: true }).click();
+  await expect(page.locator(".msg-body").filter({ hasText: `echo for: ${message}` })).toBeVisible();
+  const branches = await (await page.request.get(`/api/projects/${seeded.projectId}/branches`)).json();
+  const child = branches.find((b: { displayName: string }) => b.displayName === childName);
+  expect(child.forkFromNodeId).toBe(sourceNode.id);
+  const childConversation = await (await page.request.get(`/api/branches/${child.id}/conversation`)).json();
+  expect(JSON.stringify(childConversation)).toContain(message);
+  expect(JSON.stringify(childConversation)).not.toContain(`seed ${mainId.slice(0, 4)} turn 3`);
+  expect(await (await page.request.get(`/api/branches/${mainId}/conversation`)).json()).toEqual(before);
 });

@@ -2,13 +2,13 @@
 // shown on forked branches), composer (send disabled while branch busy), and
 // an Interrupt button (gate 6 — interrupt the ACTIVE branch only).
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useStore, branchBusy, branchLastNode } from "../store/useStore";
 import { api } from "../api/client";
 import { ForkDialog } from "./ForkDialog";
 import type { EffectiveConversationItem, WorkspaceStatus } from "../types";
 
-export function ChatPane() {
+export function ChatPane({ highlightNodeId = null }: { highlightNodeId?: string | null }) {
   const st = useStore();
   const branchId = st.activeBranchId;
   const branch = st.branches.find((b) => b.id === branchId);
@@ -117,6 +117,7 @@ export function ChatPane() {
             key={`${m.nodeId}-${m.seq}-${m.role}`}
             m={m}
             turn={turnNumbers.get(m.nodeId) ?? 1}
+            highlighted={m.nodeId === highlightNodeId}
             onFork={(nodeId) => { setForkNodeId(nodeId); setShowFork(true); }}
           />
         ))}
@@ -145,11 +146,19 @@ export function ChatPane() {
   );
 }
 
-function MessageRow({ m, turn, onFork }: { m: EffectiveConversationItem; turn: number; onFork: (nodeId: string) => void }) {
+function MessageRow({ m, turn, onFork, highlighted }: { m: EffectiveConversationItem; turn: number; onFork: (nodeId: string) => void; highlighted: boolean }) {
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (highlighted) rowRef.current?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [highlighted]);
   const [open, setOpen] = useState(false);
   const isUser = m.role === "user";
   return (
-    <div className={`msg ${m.role}`}>
+    <div
+      ref={rowRef}
+      className={`msg ${m.role} ${highlighted ? "msg-highlight" : ""}`}
+      data-node-id={m.nodeId}
+    >
       <div className="msg-hd">
         <span className="msg-role">{isUser ? "You" : "Assistant"}</span>
         {m.origin === "inherited" ? (

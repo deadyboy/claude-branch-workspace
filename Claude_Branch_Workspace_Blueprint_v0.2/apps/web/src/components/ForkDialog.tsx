@@ -14,6 +14,7 @@ interface ForkDialogProps {
   /** Prefer this node when opening from a branch row's latest-turn action. */
   defaultNodeId?: string | null;
   onClose: () => void;
+  onCreated?: (branch: Branch) => void;
 }
 
 /**
@@ -21,7 +22,7 @@ interface ForkDialogProps {
  * read from the effective conversation, so inherited turns on a child branch
  * are available as fork points too.
  */
-export function ForkDialog({ branch, defaultNodeId = null, onClose }: ForkDialogProps) {
+export function ForkDialog({ branch, defaultNodeId = null, onClose, onCreated }: ForkDialogProps) {
   const [candidates, setCandidates] = useState<ForkCandidate[]>([]);
   const [selectedNodeId, setSelectedNodeId] = useState(defaultNodeId ?? "");
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>("shared");
@@ -29,6 +30,7 @@ export function ForkDialog({ branch, defaultNodeId = null, onClose }: ForkDialog
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [worktreeReason, setWorktreeReason] = useState<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -53,6 +55,25 @@ export function ForkDialog({ branch, defaultNodeId = null, onClose }: ForkDialog
     };
   }, [branch.id, defaultNodeId]);
 
+  useEffect(() => {
+    let disposed = false;
+    const cached = useStore.getState().capabilitiesByProject[branch.projectId];
+    if (cached) {
+      setWorktreeReason(cached.worktreeAvailable ? null : cached.worktreeReason ?? "Worktree is unavailable for this project.");
+    }
+    void api.capabilities(branch.projectId).then((caps) => {
+      if (disposed) return;
+      useStore.getState().setCapabilities(branch.projectId, caps);
+      setWorktreeReason(caps.worktreeAvailable ? null : caps.worktreeReason ?? "Worktree is unavailable for this project.");
+      if (!caps.worktreeAvailable) setWorkspaceMode("shared");
+    }).catch(() => {
+      if (disposed) return;
+      setWorktreeReason("Worktree availability could not be checked.");
+      setWorkspaceMode("shared");
+    });
+    return () => { disposed = true; };
+  }, [branch.projectId]);
+
   const selected = useMemo(
     () => candidates.find((candidate) => candidate.node.id === selectedNodeId) ?? null,
     [candidates, selectedNodeId]
@@ -63,9 +84,13 @@ export function ForkDialog({ branch, defaultNodeId = null, onClose }: ForkDialog
     setBusy(true);
     setError(null);
     try {
-      await api.createFork(branch.projectId, selectedNodeId, name || undefined, workspaceMode);
+      const created = await api.createFork(branch.projectId, selectedNodeId, name || undefined, workspaceMode);
+      if (useStore.getState().activeProjectId !== branch.projectId) return;
       const refreshed = await api.listBranches(branch.projectId);
+      if (useStore.getState().activeProjectId !== branch.projectId) return;
       useStore.getState().setBranches(refreshed);
+      useStore.getState().setActiveBranch(created.branch.id);
+      onCreated?.(created.branch);
       onClose();
     } catch (reason: unknown) {
       // Keep the chooser open so a dirty worktree or a stale node can be
@@ -109,9 +134,10 @@ export function ForkDialog({ branch, defaultNodeId = null, onClose }: ForkDialog
           disabled={busy}
         >
           <option value="shared">Shared files</option>
-          <option value="worktree">Isolated clean HEAD worktree</option>
+          <option value="worktree" disabled={Boolean(worktreeReason)}>Isolated clean HEAD worktree</option>
         </select>
       </label>
+      {worktreeReason && <div className="fork-explanation" role="note">Worktree unavailable: {worktreeReason}</div>}
       <div className="fork-explanation" role="note">
         {workspaceMode === "shared"
           ? "Shared files: writes are visible to every branch using this workspace."

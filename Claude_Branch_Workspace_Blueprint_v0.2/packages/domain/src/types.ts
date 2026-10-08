@@ -368,6 +368,77 @@ export interface ApplyResult {
   replayed: boolean;
 }
 
+// ---- S5 / E8: project relationship graph (docs/14 §4.4) ----
+//
+// ONLY three relationship classes are promised by the freeze (docs/14 §2.2):
+//   1. directory containment  `contains`   project → directory/file (filesystem)
+//   2. task execution         `executedBy` task → branch
+//   3. artifact provenance    `produced`   turn/branch/task → artifact
+//
+// Code import/call dependencies and any automatic semantic graph are explicitly
+// NOT part of the contract — "UI 文案不得宣称已理解任意代码结构". Nothing here
+// reads file CONTENTS: filesystem nodes carry only path / type / size.
+export type ProjectGraphNodeKind =
+  | "project"
+  | "directory"
+  | "file"
+  | "task"
+  | "branch"
+  | "turn"
+  | "artifact";
+
+export interface ProjectGraphNode {
+  /** Stable, prefixed identity: "project:<id>", "file:<relpath>", etc. */
+  id: string;
+  kind: ProjectGraphNodeKind;
+  /** Human label; never identity (constitution §2.5). */
+  label: string;
+  projectId: UUID;
+  /** Filesystem nodes: path relative to rootPath, posix-separated. */
+  path?: string;
+  /** File nodes: whether the path existed on disk when scanned (stat-checked). */
+  exists?: boolean;
+  /** File nodes: byte size (present only when it exists and is a regular file). */
+  sizeBytes?: number;
+  /** Domain link fields (present per kind). */
+  branchId?: UUID;
+  taskId?: UUID;
+  artifactId?: UUID;
+  nodeId?: UUID;
+  /** Task/branch/turn status, when the node has one. */
+  status?: string;
+  /** Directory nodes: children were cut by the depth/node limits (E8 §5). */
+  truncated?: boolean;
+}
+
+export type ProjectGraphEdgeKind = "contains" | "executedBy" | "produced";
+
+// Which field/mechanism an edge was derived from. Edges are NOT all equally
+// trusted, so the origin is carried explicitly (docs/14 §4.4 "推测或人工添加的
+// 关联必须标注来源"): filesystem-scanned containment is a different claim from an
+// artifact-declared path or an origin-field linkage.
+export type ProjectGraphProvenance =
+  | "filesystem" // directory containment observed by scanning rootPath
+  | "artifact.path" // file node declared by an artifact's path (may be missing)
+  | "task.branchId" // task → its executing branch
+  | "artifact.originNodeId" // artifact → the turn that produced it
+  | "artifact.originBranchId" // artifact → the branch that produced it
+  | "artifact.originTaskId"; // artifact → the task that produced it
+
+export interface ProjectGraphEdge {
+  id: string;
+  kind: ProjectGraphEdgeKind;
+  source: string; // node id
+  target: string; // node id
+  provenance: ProjectGraphProvenance;
+}
+
+export interface ProjectGraph {
+  nodes: ProjectGraphNode[];
+  edges: ProjectGraphEdge[];
+  truncated: boolean;
+}
+
 // Branch context snapshot used for reconstruction fork (ADR-006 Option 3).
 export interface BranchContextSnapshot {
   branchId: UUID;

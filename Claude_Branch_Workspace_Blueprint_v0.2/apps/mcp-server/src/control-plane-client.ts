@@ -368,6 +368,20 @@ export class ControlPlaneClient {
     });
   }
 
+  createTask(body: { projectId: string; branchId: string; title: string; instructions: string; role?: string }): Promise<JsonRecord> {
+    return this.request<JsonRecord>("/api/tasks", { method: "POST", body });
+  }
+  runTask(taskId: string): Promise<JsonRecord> {
+    return this.request<JsonRecord>(`/api/tasks/${encodeURIComponent(taskId)}/run`, { method: "POST", body: {} });
+  }
+  getTask(taskId: string): Promise<JsonRecord> {
+    return this.request<JsonRecord>(`/api/tasks/${encodeURIComponent(taskId)}`);
+  }
+
+  registerArtifact(branchId: string, body: { nodeId: string; path: string; kind?: "file" | "report"; summary?: string }): Promise<JsonRecord> {
+    return this.request<JsonRecord>(`/api/branches/${encodeURIComponent(branchId)}/artifacts`, { method: "POST", body });
+  }
+
   listAgentRuns(branchId: string): Promise<AgentRunWire[]> {
     return this.request<AgentRunWire[]>(`/api/branches/${encodeURIComponent(branchId)}/agent-runs`);
   }

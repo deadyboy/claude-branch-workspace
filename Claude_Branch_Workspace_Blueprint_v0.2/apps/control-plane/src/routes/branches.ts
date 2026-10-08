@@ -4,13 +4,14 @@
 
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../context.js";
-import { runTurnOnce } from "../turn-runner.js";
-import { QueueCancelled } from "../turn-scheduler.js";
+import { FileAccessError, resolveSafeFile } from "../file-content.js";
+import { turnExecution } from "../turn-execution.js";
 
 export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
   const { svc, repo, sessionManager, forkOrchestrator, bus, adapter } = ctx;
   const workspaceManager = ctx.workspaceManager;
   const scheduler = ctx.scheduler;
+  const { submitTurn } = turnExecution(ctx);
 
   app.get("/api/projects/:id/branches", async (req) => {
     const { id } = req.params as { id: string };
@@ -122,99 +123,6 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
     return reply.code(202).send({ nodeId: node.id });
   });
 
-  async function submitTurn(branchId: string, nodeId: string, text: string, requestedCwd?: string): Promise<void> {
-    try {
-      const branch = svc.getBranch(branchId);
-      if (!branch) throw new Error(`branch ${branchId} not found`);
-      const cwd = workspaceManager
-        ? await workspaceManager.bind(branch, requestedCwd ?? null)
-        : requestedCwd ?? branch.workspacePath ?? svc.getProject(branch.projectId)?.rootPath ?? ".";
-      const run = () => runTurnAsync(branchId, nodeId, text, cwd);
-      if (scheduler) {
-        // Include the branch identity in the key. Shared workspaces remain
-        // visible to the UI, while one branch cannot deadlock another branch
-        // by waiting on a nested MCP/file operation in the same directory.
-        await scheduler.submit({
-          branchId,
-          projectId: branch.projectId,
-          workspace: `${cwd}#${branchId}`,
-          run,
-        });
-      } else {
-        await run();
-      }
-    } catch (err) {
-      if (err instanceof QueueCancelled) {
-        try { svc.cancelTurn(nodeId); } catch { /* node already terminal */ }
-        sessionManager.release(branchId);
-        return;
-      }
-      const msg = err instanceof Error ? err.message : String(err);
-      const cancelled = sessionManager.isCancellationRequested(branchId);
-      try {
-        if (cancelled) {
-          const key = sessionManager.getState(branchId)?.sessionKey ?? null;
-          svc.cancelTurn(nodeId, { runtimeSessionId: key });
-        } else {
-          svc.completeTurn(nodeId, { assistantContent: null, status: "failed" });
-        }
-      } catch { /* node already terminal */ }
-      sessionManager.release(branchId);
-      // eslint-disable-next-line no-console
-      console.error(`[turn ${branchId}/${nodeId}] ${msg}`);
-    }
-  }
-
-  async function runTurnAsync(branchId: string, nodeId: string, text: string, cwd: string): Promise<void> {
-    try {
-      const st = await sessionManager.resolveSession({
-        branchId,
-        cwd,
-      });
-      // The in-flight node was claimed synchronously in the handler (gate 11)
-      // and drained into st.nodeId by resolveSession; release() clears it at end.
-      // A pending-start interrupt is recorded on the materialized state. Do not
-      // start the user turn after cancellation; startSession may only have
-      // warmed the persistent runtime handle.
-      if (st.cancelRequested) {
-        svc.cancelTurn(nodeId, { runtimeSessionId: st.sessionKey });
-        sessionManager.release(branchId);
-        return;
-      }
-      const { result } = await runTurnOnce({
-        svc, bus, adapter,
-        sessionKey: st.sessionKey,
-        branchId,
-        nodeId,
-        runtimeSessionId: st.sessionKey,
-        text,
-      });
-      if (result.status === "cancelled") {
-        svc.cancelTurn(nodeId, { runtimeSessionId: st.sessionKey });
-      } else {
-        svc.completeTurn(nodeId, {
-          assistantContent: result.assistantContent,
-          status: result.status === "completed" ? "completed" : "failed",
-        });
-      }
-      sessionManager.release(branchId);
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const cancelled = sessionManager.isCancellationRequested(branchId);
-      try {
-        if (cancelled) {
-          const key = sessionManager.getState(branchId)?.sessionKey ?? null;
-          svc.cancelTurn(nodeId, { runtimeSessionId: key });
-        } else {
-          svc.completeTurn(nodeId, { assistantContent: null, status: "failed" });
-        }
-      } catch { /* node already terminal */ }
-      try { sessionManager.release(branchId); } catch { /* already cleared */ }
-      // eslint-disable-next-line no-console
-      console.error(`[turn ${branchId}/${nodeId}] ${msg}`);
-    }
-  }
-
   // Interrupt ONLY this branch's active invocation (gate 6): 202 accepted;
   // the route leaves the domain transition to the turn's own cancellation path
   // (adapter interrupt surfaces wasInterrupted → runTurnOnce returns cancelled
@@ -234,6 +142,30 @@ export function registerBranches(app: FastifyInstance, ctx: AppContext): void {
     if (active && key !== null) return reply.code(202).send({ interrupted: key });
     if (pending || pendingFork || queued) return reply.code(202).send({ interruptRequested: true, queued });
     return reply.code(409).send({ error: "branch is idle" });
+  });
+
+  // A declared execution result, verified on disk; no exclusive authorship claim.
+  app.post("/api/branches/:id/artifacts", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const branch = svc.getBranch(id);
+    if (!branch) return reply.code(404).send({ error: "branch not found" });
+    const body = (req.body ?? {}) as { nodeId?: unknown; path?: unknown; kind?: unknown; summary?: unknown };
+    if (typeof body.nodeId !== "string" || typeof body.path !== "string") return reply.code(400).send({ error: "nodeId and relative path are required" });
+    const node = svc.getNode(body.nodeId);
+    if (!node || node.branchId !== id) return reply.code(400).send({ error: "artifact node must belong to this branch" });
+    if (body.kind !== undefined && body.kind !== "file" && body.kind !== "report") return reply.code(400).send({ error: "kind must be file or report" });
+    if (body.summary !== undefined && typeof body.summary !== "string") return reply.code(400).send({ error: "summary must be a string" });
+    const root = branch.workspacePath ?? (branch.workspaceMode === "shared" ? svc.getProject(branch.projectId)?.rootPath : null);
+    if (!root) return reply.code(409).send({ error: "workspace path is unavailable" });
+    try {
+      const file = await resolveSafeFile(root, body.path);
+      if (!file.exists) return reply.code(404).send({ error: "declared artifact file does not exist" });
+      const task = svc.listTasksByProject(branch.projectId).find(t => svc.listTaskAttempts(t.id).some(a => a.nodeId === node.id && a.branchId === id));
+      const artifact = svc.createArtifact({ projectId: branch.projectId, originBranchId: id, originNodeId: node.id,
+        originTaskId: task?.id ?? null, kind: body.kind as "file" | "report" | undefined ?? "file", path: file.path,
+        summary: body.summary as string | undefined ?? `Declared result: ${file.path}` });
+      return reply.code(201).send(artifact);
+    } catch (err) { if (err instanceof FileAccessError) return reply.code(err.code).send({ error: err.message }); throw err; }
   });
 
   // Breadcrumb (docs/10 §ancestry): this branch + its snapshot + ancestors.

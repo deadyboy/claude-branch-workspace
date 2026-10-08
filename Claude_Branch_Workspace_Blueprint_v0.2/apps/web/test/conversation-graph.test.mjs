@@ -10,6 +10,7 @@ import {
   isForkable,
   buildBreadcrumb,
   layoutGraph,
+  conversationThroughNode,
 } from "../src/lib/conversationGraph.ts";
 
 // Minimal factory helpers — only the fields the projection reads.
@@ -142,6 +143,20 @@ test("E2: inherited messages reference the original nodeId and are not duplicate
   // Inherited items keep pointing at the ORIGINAL branch's node ids.
   assert.deepEqual([...new Set(inherited.map((i) => i.nodeId))].sort(), ["m1", "m2"]);
   assert.equal(local[0].nodeId, "a1");
+});
+
+test("E2: graph context ends at the selected persisted node and never includes later turns", () => {
+  const conversation = [
+    { role: "user", content: "early marker", nodeId: "n1", origin: "local", seq: 1 },
+    { role: "assistant", content: "early answer", nodeId: "n1", origin: "local", seq: 2 },
+    { role: "user", content: "selected marker", nodeId: "n2", origin: "local", seq: 3 },
+    { role: "assistant", content: "selected answer", nodeId: "n2", origin: "local", seq: 4 },
+    { role: "user", content: "later secret", nodeId: "n3", origin: "local", seq: 5 },
+  ];
+  const context = conversationThroughNode(conversation, "n2");
+  assert.deepEqual(context.map((item) => item.nodeId), ["n1", "n1", "n2", "n2"]);
+  assert.equal(context.some((item) => item.content.includes("later secret")), false);
+  assert.equal(conversationThroughNode(conversation, "missing"), null);
 });
 
 test("E2: breadcrumb is root-first and terminates on a cycle", () => {

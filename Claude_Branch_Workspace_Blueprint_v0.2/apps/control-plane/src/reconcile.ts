@@ -37,5 +37,13 @@ export async function reconcileOnBoot(svc: DomainService): Promise<ReconcileRepo
     cancelledOrphanRuns++;
   }
 
+  // Process ownership is gone after boot; no live attempt may outlive it.
+  for (const project of svc.listProjects()) for (const task of svc.listTasksByProject(project.id)) {
+    for (const attempt of svc.listTaskAttempts(task.id)) {
+      if (attempt.status === "queued" || attempt.status === "running") {
+        svc.completeTaskAttempt(attempt.id, { status: "cancelled", error: "control plane restarted during execution" });
+      }
+    }
+  }
   return { cancelledNodes, interruptedSessions, cancelledOrphanRuns };
 }

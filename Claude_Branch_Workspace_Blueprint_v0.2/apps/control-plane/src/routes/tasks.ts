@@ -7,12 +7,12 @@
 //   POST /api/tasks/:id/apply      { preview: false, confirmToken }  → ApplyResult
 //
 // The apply endpoints (E4b) live in ../task-apply.ts; this file only validates
-// the body and maps ApplyError to the right status. A scheduler is NOT
-// implemented here; the durable `queued` status lets a task express "waiting for
-// a slot".
+// the body and maps ApplyError to the right status. Real task execution shares
+// the ordinary message scheduler and runtime via turn-execution.
 
 import type { FastifyInstance } from "fastify";
 import type { AppContext } from "../context.js";
+import { turnExecution } from "../turn-execution.js";
 import type { TaskStatus } from "@cbw/domain";
 import { ApplyError, applyTask, computeApplyPreview } from "../task-apply.js";
 
@@ -100,9 +100,25 @@ export function registerTasks(app: FastifyInstance, ctx: AppContext): void {
     });
   });
 
+  app.post("/api/tasks/:id/run", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const task = svc.getTask(id);
+    if (!task) return reply.code(404).send({ error: "task not found" });
+    if (svc.listTaskAttempts(id).some(a => a.status === "queued" || a.status === "running")) {
+      return reply.code(409).send({ error: "task already has an active attempt" });
+    }
+    if (!task.branchId) return reply.code(409).send({ error: "bind an execution branch before running the task" });
+    if (ctx.sessionManager.hasActiveTurn(task.branchId)) return reply.code(409).send({ error: "branch is busy" });
+    const node = svc.openTurn({ branchId: task.branchId, userContent: task.instructions });
+    const attempt = svc.addTaskAttempt({ taskId: id, branchId: task.branchId, nodeId: node.id, status: "queued" });
+    ctx.sessionManager.claimTurn(task.branchId, node.id);
+    void turnExecution(ctx).submitTurn(task.branchId, node.id, task.instructions, undefined, attempt.id);
+    return reply.code(202).send({ attempt, nodeId: node.id });
+  });
+
   // Attempts: a task may be retried many times. Each retry appends a NEW attempt
   // and retains the old ones (E5). Exposed for the UI/MCP and covered by tests;
-  // the scheduler/turn-runner is NOT wired here.
+  // retained as a compatible ledger API; UI execution uses /run.
   app.post("/api/tasks/:id/attempts", async (req, reply) => {
     const { id } = req.params as { id: string };
     const t = svc.getTask(id);

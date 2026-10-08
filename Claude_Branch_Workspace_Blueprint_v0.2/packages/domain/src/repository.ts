@@ -527,8 +527,14 @@ export class Repository {
   }
   listTaskAttempts(taskId: string): TaskAttempt[] {
     return this.db
-      .prepare(`SELECT ${TASK_ATTEMPT_COLS} FROM task_attempts WHERE task_id = ? ORDER BY started_at, id`)
+      .prepare(`SELECT ${TASK_ATTEMPT_COLS} FROM task_attempts WHERE task_id = ? ORDER BY started_at, rowid`)
       .all(taskId) as TaskAttempt[];
+  }
+  startTaskAttempt(id: string): void {
+    this.db.prepare("UPDATE task_attempts SET status = 'running' WHERE id = ? AND status = 'queued'").run(id);
+  }
+  attachTaskAttemptRun(id: string, runId: string): void {
+    this.db.prepare("UPDATE task_attempts SET agent_run_id = ? WHERE id = ? AND agent_run_id IS NULL").run(runId, id);
   }
   /** Terminal transition for one attempt; the row itself is preserved. */
   completeTaskAttempt(id: string, status: string, resultRef: string | null, error: string | null, endedAt: string): void {
