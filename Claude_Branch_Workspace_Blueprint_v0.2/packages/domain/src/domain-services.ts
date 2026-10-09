@@ -569,7 +569,7 @@ export class DomainService {
    */
   completeTurn(
     nodeId: string,
-    input: { assistantContent?: string | null; status: Extract<ConversationNode["status"], "completed" | "failed">; }
+    input: { assistantContent?: string | null; runtimeAssistantMessageId?: string | null; status: Extract<ConversationNode["status"], "completed" | "failed">; }
   ): ConversationNode {
     const node = this.repo.getNode(nodeId);
     if (!node) throw new DomainError(`node ${nodeId} not found`);
@@ -580,6 +580,8 @@ export class DomainService {
 
     const at = this.now();
     return this.repo.transaction(() => {
+      // Only completed turns provide a safe transcript boundary for a fork.
+      const runtimeAssistantMessageId = input.status === "completed" ? input.runtimeAssistantMessageId ?? null : null;
       let assistantMsg: Message | null = null;
       if (input.assistantContent != null) {
         assistantMsg = {
@@ -588,7 +590,7 @@ export class DomainService {
           branchId: b.id,
           role: "assistant",
           visibleContent: this.chatTruthSafe(input.assistantContent),
-          runtimeMessageId: null,
+          runtimeMessageId: runtimeAssistantMessageId,
           createdAt: at,
           seq: this.repo.nextMessageSeq(b.id),
         };
@@ -600,6 +602,7 @@ export class DomainService {
       // completedAt (only "completed" timestamps completion). "cancelled" is
       // set exclusively through cancelTurn.
       const completedAt = input.status === "completed" ? at : null;
+      this.repo.setNodeRuntimeAssistantMessage(nodeId, runtimeAssistantMessageId);
       this.repo.setNodeStatus(nodeId, input.status, completedAt);
       this.repo.touchProject(b.projectId, at);
       return this.repo.getNode(nodeId) as ConversationNode;

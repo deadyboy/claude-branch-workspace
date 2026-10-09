@@ -195,6 +195,9 @@ export class Repository {
   setNodeAssistantMessage(id: string, assistantMessageRef: string | null): void {
     this.db.prepare(`UPDATE conversation_nodes SET assistant_message_ref = ? WHERE id = ?`).run(assistantMessageRef, id);
   }
+  setNodeRuntimeAssistantMessage(id: string, runtimeAssistantMessageId: string | null): void {
+    this.db.prepare(`UPDATE conversation_nodes SET runtime_assistant_message_id = ? WHERE id = ?`).run(runtimeAssistantMessageId, id);
+  }
   /** Nodes still pending after a crash → reconciled at boot (Phase 4, gate 15). */
   listPendingNodes(): ConversationNode[] {
     return this.db

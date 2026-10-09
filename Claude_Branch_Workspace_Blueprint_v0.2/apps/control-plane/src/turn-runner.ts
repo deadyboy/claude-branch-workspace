@@ -126,12 +126,16 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
   const events: CanonicalEvent[] = [];
   const rawText: string[] = [];
   const assistantIndex = new Map<string, number>();
+  let runtimeAssistantMessageId: string | null = null;
   let terminal: { status: "completed" | "failed"; stopReason: string | null; exitCode: number | null } | null = null;
   let cancelledByInterrupt = false;
   let errorMessage: string | null = null;
 
   try {
     for await (const raw of adapter.sendMessage(args.sessionKey, { text: args.text })) {
+      // Tool-only assistant records still advance the transcript boundary.
+      // Never substitute API messageId: it identifies a different surface.
+      if (raw.kind === "assistant") runtimeAssistantMessageId = raw.transcriptUuid ?? null;
       // Verbatim chat truth capture — BEFORE any observer scrub (gate 4).
       if (isAssistantText(raw)) {
         const key = raw.messageId ? `id:${raw.messageId}` : `text:${raw.text}`;
@@ -152,6 +156,9 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
         };
         continue; // Publish terminal state only after the stream ends successfully.
       }
+      // A transcript anchor is not a visible chat message. Tool-only and
+      // thinking-only records must not add blank Timeline completion entries.
+      if (raw.kind === "assistant" && !raw.text) continue;
       const evs = observer.feed(raw);
       events.push(...evs);
     }
@@ -191,6 +198,7 @@ export async function runTurnOnce(args: RunTurnOnceArgs): Promise<RunTurnOutcome
       status,
       stopReason: errorMessage ? "runtime_error" : terminal?.stopReason ?? (status === "failed" ? "missing_terminal_result" : null),
       assistantContent: rawText.length ? rawText.join("\n") : null,
+      runtimeAssistantMessageId: status === "completed" ? runtimeAssistantMessageId : null,
       exitCode: terminal?.exitCode ?? null,
       eventCount: events.length,
     },

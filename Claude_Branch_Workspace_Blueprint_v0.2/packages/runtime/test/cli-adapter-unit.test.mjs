@@ -61,9 +61,12 @@ function writeToolFakeClaude(dir) {
   const script = `import { stdout } from 'node:process';
 stdout.write(JSON.stringify({ type:'system', subtype:'init', session_id:'TOOLS-EXT', runtime_version:'2.1.226-fake' }) + '\\n');
 // assistant with BOTH text and a nested tool_use block
-stdout.write(JSON.stringify({ type:'assistant', message:{ id:'m1', role:'assistant', content:[
+stdout.write(JSON.stringify({ type:'assistant', uuid:'transcript-text', message:{ id:'m1', role:'assistant', content:[
   { type:'text', text:'READING ' },
   { type:'tool_use', id:'tu_1', name:'Read', input:{ file_path:'a.ts' } }
+] } }) + '\\n');
+stdout.write(JSON.stringify({ type:'assistant', uuid:'transcript-tool', message:{ id:'m1', role:'assistant', content:[
+  { type:'tool_use', id:'tu_2', name:'Read', input:{ file_path:'b.ts' } }
 ] } }) + '\\n');
 // user message carrying a nested tool_result
 stdout.write(JSON.stringify({ type:'user', message:{ id:'u1', role:'user', content:[
@@ -94,6 +97,12 @@ test("parseEvent: nested tool_use/tool_result + task_* are parsed; unrelated eve
   assert.ok(toolUses.length >= 1, "tool_use surfaced from nested message.content[]");
   assert.equal(toolUses[0].name, "Read");
   assert.deepEqual(toolUses[0].input, { file_path: "a.ts" });
+
+  const assistants = events.filter((e) => e.kind === "assistant");
+  assert.equal(assistants[0].messageId, "m1", "API ID remains the deduplication identity");
+  assert.equal(assistants[0].transcriptUuid, "transcript-text", "transcript UUID is separate from API ID");
+  assert.ok(assistants.some(e => e.text === "" && e.transcriptUuid === "transcript-tool"),
+    "tool-only main assistant message still exposes an inclusive transcript boundary");
 
   const toolResults = events.filter((e) => e.kind === "tool_result");
   assert.ok(toolResults.length >= 1, "tool_result surfaced from user message content");

@@ -9,6 +9,8 @@ export interface TurnResult {
   // Verbatim raw assistant text accumulated from parsed RuntimeEvents, before
   // any redaction. This is what completeTurn persists as chat truth (gate 4).
   assistantContent: string | null;
+  // Last main assistant transcript UUID; separate from API messageId dedup.
+  runtimeAssistantMessageId?: string | null;
   exitCode: number | null;
   eventCount: number;
 }
