@@ -6,10 +6,12 @@
 //      reconstruction snapshot (captureBranchContext) captured at creation.
 //   2. The child session is then bound EAGERLY, exactly once, by this
 //      orchestrator, through the SessionManager (sole writer, gate 13):
-//        - native_head_fork when the fork node IS the parent's current head AND
+//        - native_historical_fork when a native transcript UUID is recorded:
+//          the SDK copies the exact prefix without an initialization model call
+//        - legacy native_head_fork when the fork node IS the parent's current head AND
 //          the parent session is materialized → adapter.forkFromHead
 //          (monotonic --session-id binding: later parent progress cannot leak)
-//        - otherwise → adapter.reconstructBranchFromHistory(frozen snapshot)
+//        - legacy nodes without a UUID → adapter.reconstructBranchFromHistory(frozen snapshot)
 //          (snapshot-driven; the parent never needs to be alive)
 //   3. SessionManager.adoptSession registers the child so its FIRST turn
 //      resolves without re-seeding (the lazy materialization path is restricted
@@ -23,6 +25,7 @@
 // interpreted as a command) and the adapter-level test asserts ZERO tool_use.
 
 import { randomUUID } from "node:crypto";
+import { DomainError } from "@cbw/domain";
 import type { DomainService, BranchContextSnapshot, Branch } from "@cbw/domain";
 import type { RuntimeAdapter } from "@cbw/runtime";
 import type { SessionManager } from "./session-manager.js";
@@ -50,7 +53,7 @@ export interface CreateForkResult {
   branch: Branch;
   snapshot: BranchContextSnapshot | null;
   sessionKey: string | null; // null when a lazy root was created (no seed yet)
-  strategy: "native_head_fork" | "replay_reconstruction" | "lazy_root";
+  strategy: "native_head_fork" | "native_historical_fork" | "replay_reconstruction" | "lazy_root";
 }
 
 export class ForkOrchestrator {
@@ -97,32 +100,48 @@ export class ForkOrchestrator {
       boundParent.status !== "interrupted"
       ? boundParent
       : null;
+    // A persisted transcript UUID is an exact, immutable cutoff, even when
+    // another turn is currently appending to the parent's session. This also
+    // permits an active agent to delegate from an earlier completed turn.
+    const nativeBoundary = forkNode?.runtimeAssistantMessageId ?? null;
+    const useNativeHistory = Boolean(
+      this.adapter.forkFromHistoricalNode && nativeBoundary &&
+      (parentState || boundParent?.externalSessionId)
+    );
     const nativeCandidate = Boolean(
-      forkIsHead &&
+      (forkIsHead || useNativeHistory) &&
       parentBranch &&
       (!parentState || parentState.nodeId == null) &&
-      (parentState || resumableBoundParent?.externalSessionId)
+      (parentState || (useNativeHistory ? boundParent : resumableBoundParent)?.externalSessionId)
     );
     const forkReserved = nativeCandidate && !this.sessionManager.hasActiveTurn(parentBranch!.id)
       ? this.sessionManager.claimFork(parentBranch!.id)
       : false;
 
     try {
-      if (forkReserved && !parentState && resumableBoundParent?.externalSessionId) {
+      const parentToResume = useNativeHistory ? boundParent : resumableBoundParent;
+      if (forkReserved && !parentState && parentToResume?.externalSessionId) {
         try {
           parentState = await this.sessionManager.resolveSession({
             branchId: parentBranch!.id,
             cwd: this.defaultCwd(parentBranch!.id) ?? ".",
           });
-        } catch {
+        } catch (error) {
+          if (useNativeHistory) throw error;
           // If the old runtime cannot be resumed, the immutable reconstruction
           // path remains semantically correct and is selected below.
           parentState = null;
         }
       }
 
+      if (useNativeHistory && !parentState) {
+        throw new DomainError("parent session binding is being prepared; retry the fork when it is ready");
+      }
+
       const isHeadFork = Boolean(forkReserved && forkIsHead && parentState && parentState.nodeId == null);
-      const strategy: CreateForkResult["strategy"] = isHeadFork
+      const strategy: CreateForkResult["strategy"] = useNativeHistory
+        ? "native_historical_fork"
+        : isHeadFork
         ? "native_head_fork"
         : "replay_reconstruction";
 
@@ -169,7 +188,19 @@ export class ForkOrchestrator {
             throw new Error("fork bootstrap cancelled");
           }
 
-          if (isHeadFork) {
+          if (useNativeHistory) {
+            const childSession = await this.adapter.forkFromHistoricalNode!(parentState!.sessionKey, {
+              newSessionId: childSessionId,
+              cwd: runtimeCwd,
+              runtimeMessageId: nativeBoundary!,
+            });
+            if (this.sessionManager.isCancellationRequested(branch.id)) {
+              await this.adapter.terminate(childSession.sessionKey);
+              throw new Error("fork bootstrap cancelled");
+            }
+            const adopted = this.sessionManager.adoptSession(branch.id, childSession);
+            sessionKey = adopted.sessionKey;
+          } else if (isHeadFork) {
             // Native head fork — freeze NOW (monotonic --session-id: parent progress
             // after this instant cannot leak into the child).
             const childSession = await this.adapter.forkFromHead(parentState!.sessionKey, {

@@ -2,8 +2,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { forkSession, importSessionToStore } from "@anthropic-ai/claude-agent-sdk";
 import type {
   ForkInput,
+  HistoricalForkInput,
   MessageInput,
   RuntimeAdapter,
   RuntimeCapabilities,
@@ -68,7 +70,7 @@ const CAPABILITIES: RuntimeCapabilities = {
   persistentSessions: true,
   resume: true,
   forkFromHead: true,
-  forkFromHistoricalNode: true, // via reconstruction (ADR-006)
+  forkFromHistoricalNode: true, // pinned SDK's native transcript prefix copy
   rewindConversation: false, // not used for fork strategy
   nativeSubagents: true,
   lifecycleHooks: false, // empty payloads in this CLI version
@@ -337,6 +339,44 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     return { externalSessionId: ext, cwd: input.cwd ?? s.cwd, running: false, runtimeVersion: child.version, sessionKey: input.newSessionId };
   }
 
+  async forkFromHistoricalNode(sessionId: string, input: HistoricalForkInput): Promise<RuntimeSession> {
+    const source = this.sessions.get(sessionId);
+    if (!source) throw new Error(`unknown session ${sessionId}`);
+    if (!input.runtimeMessageId.trim()) throw new Error("historical fork requires a transcript UUID");
+    if (this.sessions.has(input.newSessionId)) throw new Error("fork session key already registered");
+    // The SDK chooses a fresh external UUID and copies every transcript record,
+    // including tool exchanges, through the inclusive boundary. No bootstrap
+    // prompt or model request is made. A running later turn does not change the
+    // specified completed boundary.
+    // Omit dir: CLI continuation can use another worktree while its transcript
+    // remains in the source project. The SDK's UUID lookup searches all projects.
+    const fork = await forkSession(source.externalSessionId, { upToMessageId: input.runtimeMessageId });
+    const runtimeMessageIdMap: Record<string, string> = {};
+    // SDK 0.3.295 remaps every UUID and writes forkedFrom provenance. Read those
+    // SDK-produced entries through its official import API; retain only IDs.
+    // Positional matching of getSessionMessages is unsafe around compaction.
+    await importSessionToStore(fork.sessionId, {
+      async append(_key, entries) {
+        for (const entry of entries) {
+          const origin = entry.forkedFrom;
+          if (origin && typeof origin === "object" && "sessionId" in origin && "messageUuid" in origin &&
+              origin.sessionId === source.externalSessionId && typeof origin.messageUuid === "string" &&
+              typeof entry.uuid === "string") {
+            runtimeMessageIdMap[origin.messageUuid] = entry.uuid;
+          }
+        }
+      },
+      async load() { return null; },
+    }, { includeSubagents: false });
+    if (!runtimeMessageIdMap[input.runtimeMessageId]) {
+      throw new Error("native fork did not preserve the requested transcript boundary");
+    }
+    const cwd = input.cwd ?? source.cwd;
+    this.sessions.set(input.newSessionId, { externalSessionId: fork.sessionId, cwd, running: false });
+    return { externalSessionId: fork.sessionId, sessionKey: input.newSessionId, cwd, running: false,
+      runtimeMessageIdMap, forkedFromExternalSessionId: source.externalSessionId };
+  }
+
   async reconstructBranchFromHistory(
     snapshot: { visibleMessages: { role: "user" | "assistant"; content: string }[]; projectInstructions?: string | null },
     input: ForkInput
@@ -444,7 +484,10 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
         const content = Array.isArray(ev.message?.content) ? ev.message.content : [];
         const text = content.filter((c: any) => c.type === "text" || !c.type).map((c: any) => c.text ?? "").join("");
         const out: RuntimeEvent[] = [];
-        if (text && !ev.parent_tool_use_id) out.push({ kind: "assistant", text, messageId: typeof ev.message?.id === "string" ? ev.message.id : ev.uuid });
+        if (!ev.parent_tool_use_id && (text || typeof ev.uuid === "string")) {
+          out.push({ kind: "assistant", text, messageId: typeof ev.message?.id === "string" ? ev.message.id : ev.uuid,
+            transcriptUuid: typeof ev.uuid === "string" ? ev.uuid : undefined });
+        }
         for (const b of content) {
           if (b?.type === "tool_use") {
             out.push({ kind: "tool_use", name: String(b.name ?? ""), input: b.input, id: b.id });

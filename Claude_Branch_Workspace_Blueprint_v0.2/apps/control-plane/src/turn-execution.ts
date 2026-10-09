@@ -100,6 +100,7 @@ export function turnExecution(ctx: AppContext) {
       } else {
         svc.completeTurn(nodeId, {
           assistantContent: result.assistantContent,
+          runtimeAssistantMessageId: result.runtimeAssistantMessageId,
           status: result.status === "completed" ? "completed" : "failed",
         });
       }

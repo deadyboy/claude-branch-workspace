@@ -28,7 +28,7 @@ export interface MessageInput {
 
 export type RuntimeEvent =
   | { kind: "init"; externalSessionId: string; runtimeVersion?: string }
-  | { kind: "assistant"; text: string; messageId?: string }
+  | { kind: "assistant"; text: string; messageId?: string; transcriptUuid?: string }
   | { kind: "tool_use"; name: string; input: unknown; id?: string }
   | { kind: "tool_result"; toolUseId?: string; isError?: boolean }
   | { kind: "subagent_start"; name?: string; id?: string }
@@ -57,4 +57,8 @@ export interface RuntimeSession {
   runtimeVersion?: string;
   /** Control-plane-local registry key for sendMessage/fork/terminate. */
   sessionKey: string;
+  /** Source transcript UUID -> copied UUID, returned by native disk forks. */
+  runtimeMessageIdMap?: Record<string, string>;
+  /** Native transcript source; scopes the old UUIDs in runtimeMessageIdMap. */
+  forkedFromExternalSessionId?: string;
 }

@@ -27,6 +27,11 @@ export interface ForkInput {
   seedText?: string;
 }
 
+export interface HistoricalForkInput extends ForkInput {
+  /** Transcript UUID at the inclusive boundary; distinct from API message IDs. */
+  runtimeMessageId: string;
+}
+
 /**
  * RuntimeAdapter isolates the domain/UI from any specific Claude Code version
  * or implementation (ADR-005). Semantics per docs/03: persistent and transient
@@ -46,6 +51,12 @@ export interface RuntimeAdapter {
   forkFromHead(
     sessionId: string,
     input: ForkInput
+  ): Promise<RuntimeSession>;
+
+  /** Copy the complete native transcript prefix without running a model turn. */
+  forkFromHistoricalNode?(
+    sessionId: string,
+    input: HistoricalForkInput
   ): Promise<RuntimeSession>;
 
   /** Reconstruct a new session from a persisted branch snapshot (ADR-006). */

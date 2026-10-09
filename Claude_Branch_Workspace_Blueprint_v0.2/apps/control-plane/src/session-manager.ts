@@ -359,6 +359,12 @@ export class SessionManager {
       runtimeVersion: s.runtimeVersion ?? null,
       status: "running",
       lastSeenAt: new Date().toISOString(),
+      // UUIDs are scoped to the copied child session. Never overwrite the
+      // original conversation nodes with these remapped transcript anchors.
+      metadataJson: JSON.stringify(s.runtimeMessageIdMap ? {
+        forkedFromExternalSessionId: s.forkedFromExternalSessionId,
+        runtimeMessageIdMap: s.runtimeMessageIdMap,
+      } : {}),
     });
   }
 
