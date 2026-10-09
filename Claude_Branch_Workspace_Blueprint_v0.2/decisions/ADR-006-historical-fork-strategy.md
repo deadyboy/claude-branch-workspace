@@ -7,9 +7,13 @@ Status: Accepted — Phase 0 verified 2026-09-17
 New completed turns record Claude's top-level transcript `uuid`, separately
 from the API `message.id` used for visible-text deduplication. When that anchor
 and a bound native session are available, the control plane uses the pinned
-Agent SDK 0.3.295 `forkSession({ upToMessageId })` operation, including for a
+Agent SDK 0.3.293 `forkSession({ upToMessageId })` operation, including for a
 current-head node. This is a local transcript copy, with no initialization
 model request. The branch records `native_historical_fork`.
+
+The initial capability experiment used 0.3.295. The integration pins 0.3.293,
+which exposes the same required APIs and satisfies the dependency release-age
+policy; no supply-chain policy exception is added.
 
 The SDK chooses the external child session ID; CBW's session key remains a
 separate identity. The child runtime mapping stores scoped old-to-new message

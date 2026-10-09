@@ -352,7 +352,7 @@ export class ClaudeCliAdapter implements RuntimeAdapter {
     // remains in the source project. The SDK's UUID lookup searches all projects.
     const fork = await forkSession(source.externalSessionId, { upToMessageId: input.runtimeMessageId });
     const runtimeMessageIdMap: Record<string, string> = {};
-    // SDK 0.3.295 remaps every UUID and writes forkedFrom provenance. Read those
+    // SDK 0.3.293 remaps every UUID and writes forkedFrom provenance. Read those
     // SDK-produced entries through its official import API; retain only IDs.
     // Positional matching of getSessionMessages is unsafe around compaction.
     await importSessionToStore(fork.sessionId, {
